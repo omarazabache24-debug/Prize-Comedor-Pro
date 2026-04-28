@@ -1,7 +1,9 @@
 import os
 import re
+import smtplib
 from io import BytesIO
-from datetime import datetime, date
+from datetime import datetime, date, time
+from email.message import EmailMessage
 from functools import wraps
 
 import pandas as pd
@@ -11,21 +13,20 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+REPORT_DIR = os.path.join(BASE_DIR, "reportes_cierre")
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(REPORT_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "prize-superfruits-render-dev")
-
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-if DATABASE_URL:
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
-else:
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///comedor_local.db"
-
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL or "sqlite:///comedor_local.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
@@ -47,62 +48,86 @@ class Trabajador(db.Model):
     actualizado = db.Column(db.DateTime, default=datetime.utcnow)
     creado = db.Column(db.DateTime, default=datetime.utcnow)
 
-class Consumo(db.Model):
+class PedidoConsumo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    fecha = db.Column(db.Date, nullable=False, index=True, default=date.today)
     dni = db.Column(db.String(20), nullable=False, index=True)
-    trabajador = db.Column(db.String(180), nullable=False)
+    trabajador = db.Column(db.String(180), default="")
     empresa = db.Column(db.String(120), default="PRIZE")
     area = db.Column(db.String(120), default="")
-    fecha = db.Column(db.Date, nullable=False, default=date.today, index=True)
     tipo = db.Column(db.String(50), default="Almuerzo")
     cantidad = db.Column(db.Integer, default=1)
     precio_unitario = db.Column(db.Float, default=0.0)
     total = db.Column(db.Float, default=0.0)
     observacion = db.Column(db.String(250), default="")
+    estado = db.Column(db.String(20), default="PENDIENTE", index=True)
     creado_por = db.Column(db.String(50), default="")
+    entregado_por = db.Column(db.String(50), default="")
+    entregado_en = db.Column(db.DateTime, nullable=True)
     creado = db.Column(db.DateTime, default=datetime.utcnow)
 
-# -------------------- helpers --------------------
-def seed():
-    users = [("admin", "admin123", "admin"), ("rrhh", "rrhh123", "rrhh"), ("comedor", "comedor123", "comedor")]
-    for username, password, role in users:
-        if not User.query.filter_by(username=username).first():
-            db.session.add(User(username=username, password_hash=generate_password_hash(password), role=role))
-    db.session.commit()
+class CierreDia(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    fecha = db.Column(db.Date, unique=True, nullable=False, index=True)
+    cerrado_por = db.Column(db.String(50), default="")
+    cerrado_en = db.Column(db.DateTime, default=datetime.utcnow)
+    total_pedidos = db.Column(db.Integer, default=0)
+    total_entregados = db.Column(db.Integer, default=0)
+    total_pendientes = db.Column(db.Integer, default=0)
+    total_importe = db.Column(db.Float, default=0.0)
+    archivo_excel = db.Column(db.String(255), default="")
+    correo_destino = db.Column(db.String(200), default="")
+    correo_estado = db.Column(db.String(80), default="")
 
+# ---------- helpers ----------
 def clean_text(v):
-    if pd.isna(v):
-        return ""
+    if pd.isna(v): return ""
     return str(v).strip()
 
 def clean_dni(v):
-    if pd.isna(v):
-        return ""
-    s = str(v).strip()
-    s = re.sub(r"\.0$", "", s)
-    s = re.sub(r"\D", "", s)
+    if pd.isna(v): return ""
+    s = re.sub(r"\D", "", str(v).strip().replace(".0", ""))
     return s.zfill(8) if 1 <= len(s) < 8 else s
 
 def normalize_columns(cols):
-    out = []
+    out=[]
     for c in cols:
-        x = str(c).strip().upper()
-        x = x.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
-        x = x.replace("Ñ", "N")
-        x = re.sub(r"\s+", "_", x)
-        out.append(x)
+        x=str(c).strip().upper()
+        for a,b in [("Á","A"),("É","E"),("Í","I"),("Ó","O"),("Ú","U"),("Ñ","N")]: x=x.replace(a,b)
+        out.append(re.sub(r"\s+", "_", x))
     return out
 
-def money(v):
-    return f"S/ {float(v or 0):,.2f}"
-
+def money(v): return f"S/ {float(v or 0):,.2f}"
 app.jinja_env.filters["money"] = money
+
+def today_closed(fecha=None):
+    return CierreDia.query.filter_by(fecha=fecha or date.today()).first()
+
+def send_report_email(to_email, subject, body, attachment_path):
+    host = os.getenv("SMTP_HOST", "").strip()
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    port = int(os.getenv("SMTP_PORT", "587"))
+    sender = os.getenv("SMTP_FROM", user or "no-reply@prize.local")
+    if not (host and user and password and to_email):
+        note = os.path.join(REPORT_DIR, f"correo_no_enviado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        with open(note, "w", encoding="utf-8") as f:
+            f.write("SMTP no configurado. El Excel sí fue generado.\n\n")
+            f.write(f"Para: {to_email}\nAsunto: {subject}\nAdjunto: {attachment_path}\n\n{body}")
+        return "NO ENVIADO - SMTP NO CONFIGURADO"
+    msg = EmailMessage()
+    msg["From"] = sender; msg["To"] = to_email; msg["Subject"] = subject
+    msg.set_content(body)
+    with open(attachment_path, "rb") as f:
+        msg.add_attachment(f.read(), maintype="application", subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=os.path.basename(attachment_path))
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.starttls(); smtp.login(user, password); smtp.send_message(msg)
+    return "ENVIADO"
 
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        if not session.get("user"):
-            return redirect(url_for("login"))
+        if not session.get("user"): return redirect(url_for("login"))
         return fn(*args, **kwargs)
     return wrapper
 
@@ -110,254 +135,178 @@ def roles_required(*roles):
     def deco(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            if session.get("role") not in roles and session.get("role") != "admin":
+            if session.get("role") != "admin" and session.get("role") not in roles:
                 flash("No tienes permiso para esta opción.", "error")
                 return redirect(url_for("dashboard"))
             return fn(*args, **kwargs)
         return wrapper
     return deco
 
-BASE_HTML = """
-<!doctype html><html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PRIZE ERP Comedor</title>
-<style>
-:root{--green:#2f8f3a;--green2:#184d2a;--dark:#071d29;--blue:#2f6f95;--orange:#e66b19;--bg:#eef6f8;--card:#fff;--muted:#64748b;--line:#dbe8eb;--danger:#dc2626;--ok:#16a34a}
-*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(135deg,#eef8f3,#f8fbff);color:#08142a}a{text-decoration:none;color:inherit}.layout{display:grid;grid-template-columns:265px 1fr;min-height:100vh}.side{background:linear-gradient(180deg,#08202c,#061821);color:#fff;padding:22px;position:sticky;top:0;height:100vh}.brand{text-align:center;border-bottom:1px solid rgba(255,255,255,.14);padding-bottom:18px;margin-bottom:18px}.brand img{width:82px;height:82px;object-fit:contain;background:#fff;border-radius:999px;padding:8px}.brand h2{font-size:16px;margin:10px 0 0}.brand small{color:#dbeafe}.nav a{display:flex;gap:10px;align-items:center;padding:13px 14px;border-radius:15px;margin:7px 0;color:#dbeafe;font-weight:650}.nav a:hover,.nav .on{background:linear-gradient(90deg,rgba(47,143,58,.55),rgba(47,111,149,.22));color:#fff}.main{padding:26px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:12px}.top h1{margin:0;font-size:30px}.muted{color:var(--muted)}.pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:9px 14px;color:#334155;box-shadow:0 6px 16px rgba(15,23,42,.06)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.card{background:#fff;border:1px solid var(--line);border-radius:24px;padding:20px;box-shadow:0 12px 28px rgba(15,23,42,.08)}.kpi b{font-size:28px}.kpi span{display:block;color:var(--muted);font-size:13px;margin-top:5px}.form{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.form.full{grid-template-columns:repeat(3,1fr)}input,select,textarea{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:14px;background:#fff;font-size:14px}button,.btn{border:0;border-radius:14px;padding:12px 16px;background:var(--green);color:#fff;font-weight:800;cursor:pointer;display:inline-block}.btn2{background:#2f6f95}.btn3{background:#e66b19}.btn-danger{background:var(--danger)}.table-wrap{overflow:auto;border-radius:17px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;background:#fff}th,td{padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;font-size:14px;white-space:nowrap}th{background:#f1f7f5;color:#0f172a;position:sticky;top:0}.flash{padding:13px 15px;border-radius:14px;margin-bottom:12px;border:1px solid #fde68a;background:#fffbeb}.flash.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.flash.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.login{max-width:430px;margin:7vh auto}.login .card{text-align:center}.login img{max-width:230px;margin-bottom:15px}.filters{display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:10px;margin-bottom:14px}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:800}.badge.ok{background:#dcfce7;color:#166534}.badge.off{background:#fee2e2;color:#991b1b}.actions{display:flex;gap:8px;flex-wrap:wrap}.notice{border-left:5px solid var(--green);padding:10px 12px;background:#f0fdf4;border-radius:12px;margin:10px 0}.mini{font-size:12px;color:#64748b}@media(max-width:1050px){.layout{grid-template-columns:1fr}.side{position:relative;height:auto}.grid{grid-template-columns:1fr 1fr}.form,.form.full,.filters{grid-template-columns:1fr}.main{padding:16px}.top{align-items:flex-start;flex-direction:column}}
+BASE_HTML = r"""
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sistema Comedor PRIZE</title><style>
+:root{--green:#169b45;--green2:#0f7a35;--dark:#061b27;--blue:#0b6fad;--orange:#ff6b13;--bg:#f4f8fb;--line:#e4edf2;--muted:#64748b;--ok:#16a34a;--danger:#dc2626}*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:linear-gradient(135deg,#f7fbff,#f2fff7);color:#102033}a{text-decoration:none;color:inherit}.hero{margin:10px;border:1px solid var(--line);border-radius:14px;background:white;display:grid;grid-template-columns:340px 1fr 300px;gap:22px;align-items:center;padding:18px;box-shadow:0 8px 24px #0f172a12}.hero img{max-width:245px;max-height:120px;object-fit:contain}.hero h1{font-size:34px;margin:0 0 7px}.checks{columns:2;font-weight:650;color:#23364a}.checks div{margin:6px 0}.users{background:#061b27;color:white;border-radius:12px;padding:18px;line-height:1.9}.layout{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 175px)}.side{background:linear-gradient(180deg,#09283a,#061722);color:white;padding:18px;margin-left:10px;border-radius:16px 16px 0 0}.brand{text-align:center;border-bottom:1px solid #ffffff22;padding-bottom:15px}.brand img{width:100px;height:70px;object-fit:contain;background:#fff;border-radius:12px}.nav a{display:block;padding:12px 14px;border-radius:12px;margin:6px 0;color:#dbeafe;font-weight:700}.nav a:hover,.nav .on{background:linear-gradient(90deg,#169b45,#0b6fad);color:white}.main{padding:0 10px 20px 22px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 14px}.top h2{font-size:28px;margin:0}.muted{color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:0 10px 24px #0f172a10}.kpi b{font-size:28px;color:#102033}.kpi span{display:block;color:var(--muted);font-size:13px}.form{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}input,select,textarea{width:100%;padding:12px;border:1px solid #cfdae6;border-radius:12px;background:white}button,.btn{border:0;border-radius:12px;padding:12px 16px;background:var(--green);color:white;font-weight:800;cursor:pointer;display:inline-block}.btn2{background:var(--blue)}.btn3{background:var(--orange)}.btn-danger{background:var(--danger)}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:14px}table{width:100%;border-collapse:collapse;background:white}th,td{padding:11px;border-bottom:1px solid #edf2f7;text-align:left;white-space:nowrap;font-size:13px}th{background:#f4faf7}.badge{border-radius:999px;padding:5px 10px;font-weight:800;font-size:12px;display:inline-block}.ok{background:#dcfce7;color:#166534}.off{background:#fee2e2;color:#991b1b}.warn{background:#fef3c7;color:#92400e}.flash{margin-bottom:12px;padding:12px 14px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe}.flash.error{background:#fef2f2;border-color:#fecaca;color:#991b1b}.flash.ok{background:#f0fdf4;border-color:#bbf7d0;color:#166534}.login{max-width:460px;margin:40px auto}.login .card{text-align:center}.login img{max-width:260px}.actions{display:flex;gap:8px;flex-wrap:wrap}.notice{border-left:5px solid var(--green);padding:11px;background:#f0fdf4;border-radius:12px;margin:10px 0}.filters{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:10px;margin-bottom:12px}.footer{background:#061b27;color:#dbeafe;padding:18px 28px;margin-top:10px;display:flex;justify-content:space-between}.mini{font-size:12px;color:#64748b}@media(max-width:1050px){.hero{grid-template-columns:1fr}.checks{columns:1}.layout{grid-template-columns:1fr}.side{margin-right:10px}.grid{grid-template-columns:1fr 1fr}.form,.filters{grid-template-columns:1fr}.main{padding:12px}.top{display:block}}
 </style></head><body>
-{% if session.get('user') %}<div class="layout"><aside class="side"><div class="brand"><img src="{{ url_for('static', filename='logo.jpeg') }}"><h2>ERP Comedor</h2><small>{{session.get('user')}} · {{session.get('role')}}</small></div><nav class="nav">
-<a class="{{'on' if page=='dashboard'}}" href="{{url_for('dashboard')}}">📊 Dashboard</a>
-<a class="{{'on' if page=='consumos'}}" href="{{url_for('consumos')}}">🍽️ Consumos</a>
-<a class="{{'on' if page=='trabajadores'}}" href="{{url_for('trabajadores')}}">👥 Trabajadores</a>
-<a class="{{'on' if page=='reportes'}}" href="{{url_for('reportes')}}">📁 Reportes Planilla</a>
-<a href="{{url_for('logout')}}">🚪 Salir</a></nav></aside><main class="main">{% endif %}
-{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}
-{{content|safe}}
-{% if session.get('user') %}</main></div>{% endif %}
-</body></html>
+{% if session.get('user') %}<div class="hero"><div><img src="{{url_for('static',filename='logo.png')}}"></div><div><h1>Sistema Comedor PRIZE</h1><p class="muted">ERP para la Gestión del Comedor Corporativo</p><div class="checks"><div>✅ Registro y control de consumos</div><div>✅ Entrega de pedidos validando DNI</div><div>✅ Carga masiva de consumos Excel</div><div>✅ Cierre de día y reportes</div><div>✅ Envío automático por correo</div><div>✅ Roles y permisos</div></div></div><div class="users"><b>Usuarios de prueba</b><br>👤 admin / admin123<br>👥 rrhh / rrhh123<br>🍽️ comedor / comedor123</div></div><div class="layout"><aside class="side"><div class="brand"><img src="{{url_for('static',filename='logo.png')}}"><h3>ERP Comedor</h3><small>{{session.get('user')}} · {{session.get('role')}}</small></div><nav class="nav"><a class="{{'on' if page=='dashboard'}}" href="{{url_for('dashboard')}}">📊 Dashboard</a><a class="{{'on' if page=='pedidos'}}" href="{{url_for('pedidos')}}">🍽️ Consumos</a><a class="{{'on' if page=='entregas'}}" href="{{url_for('entregas')}}">✅ Entregas</a><a class="{{'on' if page=='carga'}}" href="{{url_for('carga_masiva')}}">📥 Carga Masiva</a><a class="{{'on' if page=='trabajadores'}}" href="{{url_for('trabajadores')}}">👥 Trabajadores</a><a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}">🔒 Cierre de Día</a><a href="{{url_for('logout')}}">🚪 Salir</a></nav></aside><main class="main">{% endif %}{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash {{c}}">{{m}}</div>{% endfor %}{% endwith %}{{content|safe}}{% if session.get('user') %}</main></div><div class="footer"><span>© 2026 Prize Superfruits - Comedor Corporativo</span><span>Versión 2.0.0</span></div>{% endif %}</body></html>
 """
 
 def render_page(content, page=""):
     return render_template_string(BASE_HTML, content=content, page=page)
 
-@app.route("/login", methods=["GET", "POST"])
+def seed():
+    for username, password, role in [("admin","admin123","admin"),("rrhh","rrhh123","rrhh"),("comedor","comedor123","comedor")]:
+        if not User.query.filter_by(username=username).first():
+            db.session.add(User(username=username,password_hash=generate_password_hash(password),role=role))
+    db.session.commit()
+
+@app.route('/login', methods=['GET','POST'])
 def login():
-    if request.method == "POST":
-        user = User.query.filter_by(username=request.form.get("username", "").strip()).first()
-        if user and user.active and check_password_hash(user.password_hash, request.form.get("password", "")):
-            session["user"] = user.username
-            session["role"] = user.role
-            return redirect(url_for("dashboard"))
-        flash("Usuario o clave incorrecta.", "error")
-    return render_page("""
-    <div class='login'><div class='card'><img src='/static/logo.jpeg'><h2>Sistema Comedor PRIZE</h2><p class='muted'>Acceso ERP en Render</p>
-    <form method='post'><input name='username' placeholder='Usuario' required><br><br><input name='password' type='password' placeholder='Clave' required><br><br><button style='width:100%'>Ingresar</button></form>
-    <p class='muted'>admin/admin123 · rrhh/rrhh123 · comedor/comedor123</p></div></div>
-    """)
+    if request.method=='POST':
+        u=User.query.filter_by(username=request.form.get('username','').strip()).first()
+        if u and u.active and check_password_hash(u.password_hash, request.form.get('password','')):
+            session['user']=u.username; session['role']=u.role; return redirect(url_for('dashboard'))
+        flash('Usuario o clave incorrecta.', 'error')
+    return render_page("""<div class='login'><div class='card'><img src='/static/logo.png'><h2>Sistema Comedor PRIZE</h2><p class='muted'>Acceso al sistema</p><form method='post'><input name='username' placeholder='Usuario' required><br><br><input name='password' type='password' placeholder='Clave' required><br><br><button style='width:100%'>Ingresar</button></form><p class='mini'>admin/admin123 · rrhh/rrhh123 · comedor/comedor123</p></div></div>""")
+@app.route('/logout')
+def logout(): session.clear(); return redirect(url_for('login'))
 
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-@app.route("/")
+@app.route('/')
 @login_required
 def dashboard():
-    today = date.today()
-    mes, anio = today.month, today.year
-    total_dia = db.session.query(db.func.sum(Consumo.total)).filter(Consumo.fecha == today).scalar() or 0
-    total_mes = db.session.query(db.func.sum(Consumo.total)).filter(db.extract('month', Consumo.fecha) == mes, db.extract('year', Consumo.fecha) == anio).scalar() or 0
-    cant_mes = db.session.query(db.func.sum(Consumo.cantidad)).filter(db.extract('month', Consumo.fecha) == mes, db.extract('year', Consumo.fecha) == anio).scalar() or 0
-    trabajadores_activos = Trabajador.query.filter_by(activo=True).count()
-    ultimos = Consumo.query.order_by(Consumo.creado.desc()).limit(12).all()
-    rows = "".join([f"<tr><td>{c.fecha}</td><td>{c.dni}</td><td>{c.trabajador}</td><td>{c.tipo}</td><td>{c.cantidad}</td><td>{money(c.total)}</td></tr>" for c in ultimos]) or "<tr><td colspan='6'>Sin consumos registrados.</td></tr>"
-    return render_page(f"""
-    <div class='top'><div><h1>Dashboard Comedor</h1><p class='muted'>Control de consumos, planilla y trabajadores.</p></div><div class='pill'>Render + PostgreSQL</div></div>
-    <div class='grid'><div class='card kpi'><b>{money(total_dia)}</b><span>Consumo de hoy</span></div><div class='card kpi'><b>{money(total_mes)}</b><span>Consumo mensual</span></div><div class='card kpi'><b>{int(cant_mes)}</b><span>Raciones del mes</span></div><div class='card kpi'><b>{trabajadores_activos}</b><span>Trabajadores activos</span></div></div><br>
-    <div class='card'><h3>Últimos consumos</h3><div class='table-wrap'><table><tr><th>Fecha</th><th>DNI</th><th>Trabajador</th><th>Tipo</th><th>Cant.</th><th>Total</th></tr>{rows}</table></div></div>
-    """, "dashboard")
+    hoy=date.today(); cerrado=today_closed(hoy)
+    total=db.session.query(db.func.sum(PedidoConsumo.total)).filter(PedidoConsumo.fecha==hoy).scalar() or 0
+    pedidos=PedidoConsumo.query.filter_by(fecha=hoy).count(); entregados=PedidoConsumo.query.filter_by(fecha=hoy,estado='ENTREGADO').count(); pend=PedidoConsumo.query.filter_by(fecha=hoy,estado='PENDIENTE').count()
+    workers=Trabajador.query.filter_by(activo=True).count(); ult=PedidoConsumo.query.filter_by(fecha=hoy).order_by(PedidoConsumo.creado.desc()).limit(10).all()
+    rows=''.join([f"<tr><td>{c.creado.strftime('%H:%M')}</td><td>{c.dni}</td><td>{c.trabajador}</td><td>{c.area}</td><td>{c.tipo}</td><td>{c.cantidad}</td><td>{money(c.total)}</td><td><span class='badge {'ok' if c.estado=='ENTREGADO' else 'warn'}'>{c.estado}</span></td></tr>" for c in ult]) or "<tr><td colspan=8>Sin pedidos de hoy.</td></tr>"
+    estado = "DÍA CERRADO" if cerrado else "DÍA ABIERTO"
+    btn = "" if cerrado else f"<a class='btn btn3' href='{url_for('cierre_dia')}'>Cerrar día y consolidar</a>"
+    return render_page(f"""<div class='top'><div><h2>Dashboard</h2><p class='muted'>Resumen general del sistema</p></div><div><span class='badge {'off' if cerrado else 'ok'}'>{estado}</span></div></div><div class='grid'><div class='card kpi'><b>{pedidos}</b><span>Pedidos de hoy</span></div><div class='card kpi'><b>{entregados}</b><span>Entregados</span></div><div class='card kpi'><b>{workers}</b><span>Trabajadores activos</span></div><div class='card kpi'><b>{money(total)}</b><span>Total del día</span></div></div><br><div class='grid' style='grid-template-columns:3fr 1fr'><div class='card'><h3>Consumos de hoy</h3><div class='table-wrap'><table><tr><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Cant.</th><th>Total</th><th>Estado</th></tr>{rows}</table></div></div><div class='card'><h3>Estado del día</h3><p><span class='badge {'off' if cerrado else 'ok'}'>{estado}</span></p><p class='muted'>Fecha: {hoy.strftime('%d/%m/%Y')}</p><p>Pendientes: <b>{pend}</b></p>{btn}</div></div>""", 'dashboard')
 
-@app.route("/consumos", methods=["GET", "POST"])
+@app.route('/pedidos', methods=['GET','POST'])
 @login_required
-@roles_required("admin", "rrhh", "comedor")
-def consumos():
-    if request.method == "POST":
-        dni = clean_dni(request.form.get("dni", ""))
-        t = Trabajador.query.filter_by(dni=dni).first()
-        if not t or not t.activo:
-            flash("DNI no encontrado o trabajador inactivo. Cárgalo primero en Trabajadores.", "error")
-            return redirect(url_for("consumos"))
-        try:
-            cantidad = int(request.form.get("cantidad") or 1)
-            precio = float(request.form.get("precio_unitario") or 0)
-            fecha = datetime.strptime(request.form.get("fecha"), "%Y-%m-%d").date() if request.form.get("fecha") else date.today()
-        except Exception:
-            flash("Revisa fecha, cantidad o precio unitario.", "error")
-            return redirect(url_for("consumos"))
-        c = Consumo(dni=dni, trabajador=t.nombre, empresa=t.empresa, area=t.area, fecha=fecha, tipo=request.form.get("tipo", "Almuerzo"), cantidad=cantidad, precio_unitario=precio, total=cantidad * precio, observacion=request.form.get("observacion", ""), creado_por=session.get("user", ""))
-        db.session.add(c); db.session.commit()
-        flash(f"Consumo registrado: {t.nombre} - {money(c.total)}", "ok")
-        return redirect(url_for("consumos"))
-    qtxt = request.args.get("q", "").strip()
-    tipo = request.args.get("tipo", "").strip()
-    query = Consumo.query
-    if qtxt:
-        like = f"%{qtxt}%"
-        query = query.filter(db.or_(Consumo.dni.ilike(like), Consumo.trabajador.ilike(like), Consumo.area.ilike(like)))
-    if tipo:
-        query = query.filter(Consumo.tipo == tipo)
-    data = query.order_by(Consumo.fecha.desc(), Consumo.id.desc()).limit(300).all()
-    rows = "".join([f"<tr><td>{c.fecha}</td><td>{c.dni}</td><td>{c.trabajador}</td><td>{c.area}</td><td>{c.tipo}</td><td>{c.cantidad}</td><td>{money(c.precio_unitario)}</td><td>{money(c.total)}</td></tr>" for c in data]) or "<tr><td colspan='8'>Sin registros.</td></tr>"
-    return render_page(f"""
-    <div class='top'><h1>Registro de Consumos</h1><a class='btn btn2' href='{url_for('exportar_consumos')}'>Exportar Excel</a></div>
-    <div class='card'><form method='post' class='form'><input name='fecha' type='date' value='{date.today()}'><input name='dni' placeholder='DNI trabajador' required><select name='tipo'><option>Desayuno</option><option selected>Almuerzo</option><option>Cena</option><option>Otros</option></select><input name='cantidad' type='number' value='1' min='1'><input name='precio_unitario' type='number' step='0.01' value='0.00' placeholder='Precio unitario'><input name='observacion' placeholder='Observación'><button>Registrar consumo</button></form></div><br>
-    <div class='card'><form method='get' class='filters'><input name='q' value='{qtxt}' placeholder='Buscar DNI, trabajador o área'><select name='tipo'><option value=''>Todos los tipos</option><option {'selected' if tipo=='Desayuno' else ''}>Desayuno</option><option {'selected' if tipo=='Almuerzo' else ''}>Almuerzo</option><option {'selected' if tipo=='Cena' else ''}>Cena</option><option {'selected' if tipo=='Otros' else ''}>Otros</option></select><button class='btn2'>Filtrar</button><a class='btn' href='{url_for('consumos')}'>Limpiar</a></form><div class='table-wrap'><table><tr><th>Fecha</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Cant.</th><th>P. Unit.</th><th>Total</th></tr>{rows}</table></div></div>
-    """, "consumos")
+@roles_required('admin','rrhh','comedor')
+def pedidos():
+    if request.method=='POST':
+        fecha=datetime.strptime(request.form.get('fecha') or str(date.today()), '%Y-%m-%d').date()
+        if today_closed(fecha): flash('El día ya está cerrado. No se puede registrar más pedidos.', 'error'); return redirect(url_for('pedidos'))
+        dni=clean_dni(request.form.get('dni','')); t=Trabajador.query.filter_by(dni=dni).first()
+        if not t or not t.activo: flash('DNI no existe o trabajador inactivo en la base.', 'error'); return redirect(url_for('pedidos'))
+        cant=int(request.form.get('cantidad') or 1); precio=float(request.form.get('precio_unitario') or 0)
+        p=PedidoConsumo(fecha=fecha,dni=dni,trabajador=t.nombre,empresa=t.empresa,area=t.area,tipo=request.form.get('tipo','Almuerzo'),cantidad=cant,precio_unitario=precio,total=cant*precio,observacion=request.form.get('observacion',''),creado_por=session.get('user',''))
+        db.session.add(p); db.session.commit(); flash('Pedido/consumo registrado y queda pendiente para entrega.', 'ok'); return redirect(url_for('pedidos'))
+    hoy=date.today(); data=PedidoConsumo.query.filter_by(fecha=hoy).order_by(PedidoConsumo.creado.desc()).limit(300).all()
+    rows=''.join([f"<tr><td>{c.creado.strftime('%H:%M')}</td><td>{c.dni}</td><td>{c.trabajador}</td><td>{c.area}</td><td>{c.tipo}</td><td>{c.cantidad}</td><td>{money(c.total)}</td><td><span class='badge {'ok' if c.estado=='ENTREGADO' else 'warn'}'>{c.estado}</span></td></tr>" for c in data]) or '<tr><td colspan=8>Sin registros.</td></tr>'
+    disabled='disabled' if today_closed(hoy) else ''
+    return render_page(f"""<div class='top'><h2>Registro y control de consumos</h2><a class='btn btn2' href='{url_for('exportar_pedidos')}'>Exportar Excel</a></div><div class='card'><h3>Registrar pedido manual</h3><form method='post' class='form'><input type='date' name='fecha' value='{hoy}' {disabled}><input name='dni' placeholder='Digite DNI' required {disabled}><select name='tipo' {disabled}><option>Almuerzo</option><option>Desayuno</option><option>Cena</option><option>Otros</option></select><input type='number' name='cantidad' value='1' min='1' {disabled}><input type='number' step='0.01' name='precio_unitario' value='10.00' placeholder='Precio' {disabled}><input name='observacion' placeholder='Observación' {disabled}><button {disabled}>Registrar</button></form></div><br><div class='card'><h3>Pedidos del día</h3><div class='table-wrap'><table><tr><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Cant.</th><th>Total</th><th>Estado</th></tr>{rows}</table></div></div>""", 'pedidos')
 
-@app.route("/trabajadores", methods=["GET", "POST"])
+@app.route('/entregas', methods=['GET','POST'])
 @login_required
-@roles_required("admin", "rrhh")
-def trabajadores():
-    if request.method == "POST" and request.form.get("manual") == "1":
-        dni = clean_dni(request.form.get("dni", ""))
-        if not dni:
-            flash("DNI inválido.", "error"); return redirect(url_for("trabajadores"))
-        t = Trabajador.query.filter_by(dni=dni).first() or Trabajador(dni=dni)
-        t.empresa = clean_text(request.form.get("empresa", "PRIZE")) or "PRIZE"
-        t.nombre = clean_text(request.form.get("nombre", ""))
-        t.cargo = clean_text(request.form.get("cargo", ""))
-        t.area = clean_text(request.form.get("area", ""))
-        t.activo = True
-        t.actualizado = datetime.utcnow()
-        db.session.add(t); db.session.commit()
-        flash("Trabajador guardado/actualizado correctamente.", "ok")
-        return redirect(url_for("trabajadores"))
+@roles_required('admin','rrhh','comedor')
+def entregas():
+    dni=clean_dni(request.values.get('dni','')); hoy=date.today()
+    if request.method=='POST' and request.form.get('accion'):
+        ids=[int(x) for x in request.form.getlist('ids')]
+        if today_closed(hoy): flash('Día cerrado. No se pueden entregar más pedidos.', 'error'); return redirect(url_for('entregas'))
+        q=PedidoConsumo.query.filter(PedidoConsumo.id.in_(ids), PedidoConsumo.estado=='PENDIENTE').all()
+        for p in q: p.estado='ENTREGADO'; p.entregado_por=session.get('user',''); p.entregado_en=datetime.utcnow()
+        db.session.commit(); flash(f'Pedidos entregados: {len(q)}', 'ok'); return redirect(url_for('entregas', dni=dni))
+    t=Trabajador.query.filter_by(dni=dni).first() if dni else None
+    pedidos=[]
+    if dni: pedidos=PedidoConsumo.query.filter_by(fecha=hoy,dni=dni).order_by(PedidoConsumo.creado).all()
+    info = f"<div class='notice'><b>{t.nombre}</b> · {t.area} · <span class='badge ok'>Activo</span></div>" if t and t.activo else ("<div class='flash error'>DNI no encontrado o inactivo.</div>" if dni else "")
+    rows=''.join([f"<tr><td><input type='checkbox' name='ids' value='{p.id}' {'disabled' if p.estado!='PENDIENTE' else 'checked'}></td><td>{p.creado.strftime('%H:%M')}</td><td>{p.tipo}</td><td>{p.cantidad}</td><td>{money(p.total)}</td><td><span class='badge {'ok' if p.estado=='ENTREGADO' else 'warn'}'>{p.estado}</span></td></tr>" for p in pedidos]) or '<tr><td colspan=6>Sin pedidos para este DNI hoy.</td></tr>'
+    return render_page(f"""<div class='top'><h2>Entrega de pedidos validando DNI</h2></div><div class='card'><form method='get' class='form' style='grid-template-columns:2fr auto'><input name='dni' value='{dni}' placeholder='Digite DNI del trabajador' autofocus><button class='btn2'>Buscar</button></form>{info}</div><br><div class='card'><h3>Pedidos del día ({hoy.strftime('%d/%m/%Y')})</h3><form method='post'><input type='hidden' name='dni' value='{dni}'><input type='hidden' name='accion' value='entregar'><div class='table-wrap'><table><tr><th></th><th>Hora</th><th>Tipo</th><th>Cantidad</th><th>Total</th><th>Estado</th></tr>{rows}</table></div><br><button>Entregar seleccionado</button> <button class='btn2' onclick="document.querySelectorAll('input[name=ids]:not(:disabled)').forEach(x=>x.checked=true)">Entregar todos</button></form></div>""", 'entregas')
 
-    if request.method == "POST" and "excel" in request.files:
-        f = request.files.get("excel")
-        if not f or not f.filename.lower().endswith((".xlsx", ".xls")):
-            flash("Sube un archivo Excel .xlsx o .xls.", "error"); return redirect(url_for("trabajadores"))
-        try:
-            df = pd.read_excel(f, dtype=str).fillna("")
-            df.columns = normalize_columns(df.columns)
-        except Exception as e:
-            flash(f"No se pudo leer el Excel: {e}", "error"); return redirect(url_for("trabajadores"))
-        required = ["DNI", "NOMBRE"]
-        missing = [c for c in required if c not in df.columns]
-        if missing:
-            flash("Faltan columnas obligatorias: " + ", ".join(missing) + ". Usa EMPRESA, DNI, NOMBRE, CARGO, AREA.", "error")
-            return redirect(url_for("trabajadores"))
-        inserted = updated = skipped = 0
-        errores = []
-        for idx, r in df.iterrows():
-            dni = clean_dni(r.get("DNI", ""))
-            nombre = clean_text(r.get("NOMBRE", ""))
-            if not dni or not nombre:
-                skipped += 1
-                if len(errores) < 5: errores.append(f"Fila {idx+2}: DNI o NOMBRE vacío")
-                continue
-            t = Trabajador.query.filter_by(dni=dni).first()
-            if t:
-                updated += 1
+@app.route('/carga_masiva', methods=['GET','POST'])
+@login_required
+@roles_required('admin','rrhh','comedor')
+def carga_masiva():
+    if request.method=='POST':
+        if today_closed(date.today()): flash('Día cerrado. No se permite cargar más consumos para hoy.', 'error'); return redirect(url_for('carga_masiva'))
+        f=request.files.get('excel')
+        if not f or not f.filename.lower().endswith(('.xlsx','.xls')): flash('Sube un Excel válido.', 'error'); return redirect(url_for('carga_masiva'))
+        df=pd.read_excel(f,dtype=str).fillna(''); df.columns=normalize_columns(df.columns)
+        if 'DNI' not in df.columns: flash('Falta columna DNI. Columnas sugeridas: FECHA, DNI, TIPO, CANTIDAD, PRECIO_UNITARIO, OBSERVACION', 'error'); return redirect(url_for('carga_masiva'))
+        creados=actualizados=errores=0
+        for _,r in df.iterrows():
+            dni=clean_dni(r.get('DNI','')); t=Trabajador.query.filter_by(dni=dni).first()
+            if not t or not t.activo: errores+=1; continue
+            fecha=pd.to_datetime(r.get('FECHA',''), errors='coerce').date() if clean_text(r.get('FECHA','')) else date.today()
+            if today_closed(fecha): errores+=1; continue
+            tipo=clean_text(r.get('TIPO','Almuerzo')) or 'Almuerzo'; cant=int(float(r.get('CANTIDAD',1) or 1)); precio=float(r.get('PRECIO_UNITARIO', r.get('PRECIO',10)) or 10)
+            # Evita duplicados exactos del Forms para el mismo día/DNI/tipo
+            exists=PedidoConsumo.query.filter_by(fecha=fecha,dni=dni,tipo=tipo,estado='PENDIENTE').first()
+            if exists: actualizados+=1; exists.cantidad=cant; exists.precio_unitario=precio; exists.total=cant*precio; exists.observacion=clean_text(r.get('OBSERVACION',''))
             else:
-                t = Trabajador(dni=dni)
-                inserted += 1
-            t.empresa = clean_text(r.get("EMPRESA", "PRIZE")) or "PRIZE"
-            t.nombre = nombre
-            t.cargo = clean_text(r.get("CARGO", ""))
-            t.area = clean_text(r.get("AREA", ""))
-            t.activo = True
-            t.actualizado = datetime.utcnow()
-            db.session.add(t)
-        db.session.commit()
-        msg = f"Excel importado: {inserted} nuevos, {updated} actualizados, {skipped} omitidos."
-        if errores: msg += " | " + " ; ".join(errores)
-        flash(msg, "ok" if skipped == 0 else "error")
-        return redirect(url_for("trabajadores"))
+                db.session.add(PedidoConsumo(fecha=fecha,dni=dni,trabajador=t.nombre,empresa=t.empresa,area=t.area,tipo=tipo,cantidad=cant,precio_unitario=precio,total=cant*precio,observacion=clean_text(r.get('OBSERVACION','')),creado_por=session.get('user',''))); creados+=1
+        db.session.commit(); flash(f'Carga masiva terminada: {creados} creados, {actualizados} actualizados, {errores} con error/no encontrados.', 'ok' if errores==0 else 'error'); return redirect(url_for('carga_masiva'))
+    hist=PedidoConsumo.query.order_by(PedidoConsumo.creado.desc()).limit(12).all()
+    rows=''.join([f"<tr><td>{p.fecha}</td><td>{p.dni}</td><td>{p.trabajador}</td><td>{p.tipo}</td><td>{p.estado}</td></tr>" for p in hist]) or '<tr><td colspan=5>Sin historial.</td></tr>'
+    return render_page(f"""<div class='top'><h2>Carga masiva de consumos</h2><a class='btn btn2' href='{url_for('plantilla_consumos')}'>Descargar plantilla Excel</a></div><div class='card'><div class='notice'>Sirve para importar los pedidos del Google Forms. Columnas: <b>FECHA, DNI, TIPO, CANTIDAD, PRECIO_UNITARIO, OBSERVACION</b>.</div><form method='post' enctype='multipart/form-data'><input type='file' name='excel' accept='.xlsx,.xls' required><br><br><button class='btn3'>Importar consumos</button></form></div><br><div class='card'><h3>Últimos importados/registrados</h3><div class='table-wrap'><table><tr><th>Fecha</th><th>DNI</th><th>Trabajador</th><th>Tipo</th><th>Estado</th></tr>{rows}</table></div></div>""", 'carga')
 
-    qtxt = request.args.get("q", "").strip()
-    empresa = request.args.get("empresa", "").strip()
-    area = request.args.get("area", "").strip()
-    estado = request.args.get("estado", "").strip()
-    query = Trabajador.query
-    if qtxt:
-        like = f"%{qtxt}%"
-        query = query.filter(db.or_(Trabajador.dni.ilike(like), Trabajador.nombre.ilike(like), Trabajador.cargo.ilike(like)))
-    if empresa:
-        query = query.filter(Trabajador.empresa == empresa)
-    if area:
-        query = query.filter(Trabajador.area == area)
-    if estado == "activo": query = query.filter(Trabajador.activo == True)
-    if estado == "inactivo": query = query.filter(Trabajador.activo == False)
-    data = query.order_by(Trabajador.nombre.asc()).limit(800).all()
-    empresas = [x[0] for x in db.session.query(Trabajador.empresa).distinct().order_by(Trabajador.empresa).all() if x[0]]
-    areas = [x[0] for x in db.session.query(Trabajador.area).distinct().order_by(Trabajador.area).all() if x[0]]
-    rows = "".join([f"<tr><td>{t.empresa}</td><td>{t.dni}</td><td>{t.nombre}</td><td>{t.cargo}</td><td>{t.area}</td><td><span class='badge {'ok' if t.activo else 'off'}'>{'Activo' if t.activo else 'Inactivo'}</span></td></tr>" for t in data]) or "<tr><td colspan='6'>No hay trabajadores para mostrar.</td></tr>"
-    opt_emp = "".join([f"<option value='{e}' {'selected' if e==empresa else ''}>{e}</option>" for e in empresas])
-    opt_area = "".join([f"<option value='{a}' {'selected' if a==area else ''}>{a}</option>" for a in areas])
-    return render_page(f"""
-    <div class='top'><div><h1>Trabajadores</h1><p class='muted'>Carga masiva, actualización automática y búsqueda rápida.</p></div><div class='actions'><a class='btn btn2' href='{url_for('plantilla_trabajadores')}'>Descargar plantilla</a><a class='btn' href='{url_for('exportar_trabajadores')}'>Exportar base</a></div></div>
-    <div class='card'><h3>Registro manual</h3><form method='post' class='form'><input type='hidden' name='manual' value='1'><input name='empresa' placeholder='Empresa' value='PRIZE'><input name='dni' placeholder='DNI' required><input name='nombre' placeholder='Nombre completo' required><input name='cargo' placeholder='Cargo'><input name='area' placeholder='Área'><button>Guardar / Actualizar</button></form></div><br>
-    <div class='card'><h3>Carga masiva Excel</h3><div class='notice'>Formato aceptado: <b>EMPRESA, DNI, NOMBRE, CARGO, AREA</b>. Si el DNI ya existe, se actualiza; si no existe, se crea.</div><form method='post' enctype='multipart/form-data'><input type='file' name='excel' accept='.xlsx,.xls' required><br><br><button class='btn3'>Importar trabajadores</button></form></div><br>
-    <div class='card'><h3>Base de trabajadores</h3><form method='get' class='filters'><input name='q' value='{qtxt}' placeholder='Buscar DNI, nombre o cargo'><select name='empresa'><option value=''>Todas las empresas</option>{opt_emp}</select><select name='area'><option value=''>Todas las áreas</option>{opt_area}</select><select name='estado'><option value=''>Todos</option><option value='activo' {'selected' if estado=='activo' else ''}>Activos</option><option value='inactivo' {'selected' if estado=='inactivo' else ''}>Inactivos</option></select><button class='btn2'>Filtrar</button></form><p class='mini'>Mostrando {len(data)} registro(s).</p><div class='table-wrap'><table><tr><th>Empresa</th><th>DNI</th><th>Nombre</th><th>Cargo</th><th>Área</th><th>Estado</th></tr>{rows}</table></div></div>
-    """, "trabajadores")
-
-@app.route("/reportes")
+@app.route('/cierre_dia', methods=['GET','POST'])
 @login_required
-@roles_required("admin", "rrhh")
-def reportes():
-    return render_page(f"""
-    <div class='top'><h1>Reportes para Planilla</h1></div>
-    <div class='card'><form method='get' action='{url_for('reporte_mensual')}' class='form full'><select name='mes'>{''.join([f'<option value={i} '+('selected' if i==date.today().month else '')+f'>{i:02d}</option>' for i in range(1,13)])}</select><input name='anio' type='number' value='{date.today().year}'><button>Descargar reporte mensual</button></form></div>
-    <br><div class='card'><h3>Integración ERP</h3><p class='muted'>El Excel contiene DNI, trabajador, empresa, área, cantidad de consumos y total para descuento o control de planilla.</p></div>
-    """, "reportes")
+@roles_required('admin')
+def cierre_dia():
+    hoy=date.today(); cerrado=today_closed(hoy)
+    if request.method=='POST':
+        if cerrado: flash('Este día ya fue cerrado.', 'error'); return redirect(url_for('cierre_dia'))
+        to_email=request.form.get('correo','').strip()
+        pedidos=PedidoConsumo.query.filter_by(fecha=hoy).order_by(PedidoConsumo.area, PedidoConsumo.trabajador).all()
+        df=pd.DataFrame([{'FECHA':p.fecha,'DNI':p.dni,'TRABAJADOR':p.trabajador,'EMPRESA':p.empresa,'AREA':p.area,'TIPO':p.tipo,'CANTIDAD':p.cantidad,'PRECIO_UNITARIO':p.precio_unitario,'TOTAL':p.total,'ESTADO':p.estado,'CREADO_POR':p.creado_por,'ENTREGADO_POR':p.entregado_por,'OBSERVACION':p.observacion} for p in pedidos])
+        resumen = df.groupby(['AREA','ESTADO'], as_index=False).agg(CANTIDAD=('CANTIDAD','sum'), TOTAL=('TOTAL','sum')) if not df.empty else pd.DataFrame(columns=['AREA','ESTADO','CANTIDAD','TOTAL'])
+        usuarios = df.groupby(['CREADO_POR'], as_index=False).agg(PEDIDOS=('DNI','count'), TOTAL=('TOTAL','sum')) if not df.empty else pd.DataFrame(columns=['CREADO_POR','PEDIDOS','TOTAL'])
+        filename=f"cierre_comedor_{hoy.strftime('%Y_%m_%d')}.xlsx"; path=os.path.join(REPORT_DIR, filename)
+        with pd.ExcelWriter(path, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='DETALLE_DIA', index=False); resumen.to_excel(writer, sheet_name='RESUMEN_AREA', index=False); usuarios.to_excel(writer, sheet_name='RESUMEN_USUARIOS', index=False)
+        total_pedidos=len(pedidos); entregados=sum(1 for p in pedidos if p.estado=='ENTREGADO'); pendientes=total_pedidos-entregados; importe=sum(p.total for p in pedidos)
+        estado_correo=send_report_email(to_email, f"Cierre comedor PRIZE {hoy.strftime('%d/%m/%Y')}", f"Se adjunta cierre del día. Pedidos: {total_pedidos}. Entregados: {entregados}. Pendientes: {pendientes}. Total: {money(importe)}", path)
+        db.session.add(CierreDia(fecha=hoy,cerrado_por=session.get('user',''),total_pedidos=total_pedidos,total_entregados=entregados,total_pendientes=pendientes,total_importe=importe,archivo_excel=filename,correo_destino=to_email,correo_estado=estado_correo)); db.session.commit()
+        flash(f'Día cerrado. Reporte generado en carpeta reportes_cierre: {filename}. Correo: {estado_correo}', 'ok'); return redirect(url_for('cierre_dia'))
+    pedidos=PedidoConsumo.query.filter_by(fecha=hoy).count(); entregados=PedidoConsumo.query.filter_by(fecha=hoy,estado='ENTREGADO').count(); pendientes=pedidos-entregados; total=db.session.query(db.func.sum(PedidoConsumo.total)).filter_by(fecha=hoy).scalar() or 0
+    status = f"<span class='badge off'>DÍA CERRADO</span><p>Archivo: <b>{cerrado.archivo_excel}</b></p><a class='btn btn2' href='{url_for('descargar_reporte_cierre', filename=cerrado.archivo_excel)}'>Descargar reporte</a>" if cerrado else "<span class='badge ok'>DÍA ABIERTO</span>"
+    form = "" if cerrado else f"<form method='post'><input name='correo' placeholder='Correo destino' value='{os.getenv('REPORTE_DESTINO','administracion@prize.pe')}'><br><br><button class='btn3'>Cerrar día y enviar reporte</button></form>"
+    return render_page(f"""<div class='top'><h2>Cierre de Día y Reportes</h2></div><div class='grid'><div class='card kpi'><b>{pedidos}</b><span>Total pedidos</span></div><div class='card kpi'><b>{entregados}</b><span>Entregados</span></div><div class='card kpi'><b>{pendientes}</b><span>Pendientes</span></div><div class='card kpi'><b>{money(total)}</b><span>Total facturado</span></div></div><br><div class='card'><h3>Estado del día</h3>{status}<div class='notice'>Al cerrar el día, se consolida el reporte de todos los usuarios, se guarda el Excel en la carpeta <b>reportes_cierre</b> junto al app.py y se intenta enviar por correo.</div>{form}</div>""", 'cierre')
 
-@app.route("/reporte_mensual")
+@app.route('/trabajadores', methods=['GET','POST'])
 @login_required
-@roles_required("admin", "rrhh")
-def reporte_mensual():
-    mes = int(request.args.get("mes", date.today().month)); anio = int(request.args.get("anio", date.today().year))
-    q = Consumo.query.filter(db.extract('month', Consumo.fecha) == mes, db.extract('year', Consumo.fecha) == anio).all()
-    rows = [{"DNI": c.dni, "TRABAJADOR": c.trabajador, "EMPRESA": c.empresa, "AREA": c.area, "TIPO": c.tipo, "FECHA": c.fecha, "CANTIDAD": c.cantidad, "PRECIO_UNITARIO": c.precio_unitario, "TOTAL": c.total} for c in q]
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        resumen = df.groupby(["DNI", "TRABAJADOR", "EMPRESA", "AREA"], as_index=False).agg(CONSUMOS=("CANTIDAD", "sum"), TOTAL_PLANILLA=("TOTAL", "sum"))
-    else:
-        resumen = pd.DataFrame(columns=["DNI", "TRABAJADOR", "EMPRESA", "AREA", "CONSUMOS", "TOTAL_PLANILLA"])
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        resumen.to_excel(writer, sheet_name="RESUMEN_PLANILLA", index=False)
-        df.to_excel(writer, sheet_name="DETALLE_CONSUMOS", index=False)
-    output.seek(0)
-    return send_file(output, as_attachment=True, download_name=f"reporte_planilla_comedor_{anio}_{mes:02d}.xlsx", mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+@roles_required('admin','rrhh')
+def trabajadores():
+    if request.method=='POST' and request.form.get('manual')=='1':
+        dni=clean_dni(request.form.get('dni','')); t=Trabajador.query.filter_by(dni=dni).first() or Trabajador(dni=dni)
+        t.empresa=clean_text(request.form.get('empresa','PRIZE')) or 'PRIZE'; t.nombre=clean_text(request.form.get('nombre','')); t.cargo=clean_text(request.form.get('cargo','')); t.area=clean_text(request.form.get('area','')); t.activo=True; db.session.add(t); db.session.commit(); flash('Trabajador guardado.', 'ok'); return redirect(url_for('trabajadores'))
+    if request.method=='POST' and 'excel' in request.files:
+        f=request.files.get('excel'); df=pd.read_excel(f,dtype=str).fillna(''); df.columns=normalize_columns(df.columns)
+        if 'DNI' not in df.columns or 'NOMBRE' not in df.columns: flash('Faltan DNI y NOMBRE.', 'error'); return redirect(url_for('trabajadores'))
+        n=0
+        for _,r in df.iterrows():
+            dni=clean_dni(r.get('DNI','')); nombre=clean_text(r.get('NOMBRE',''))
+            if not dni or not nombre: continue
+            t=Trabajador.query.filter_by(dni=dni).first() or Trabajador(dni=dni)
+            t.empresa=clean_text(r.get('EMPRESA','PRIZE')) or 'PRIZE'; t.nombre=nombre; t.cargo=clean_text(r.get('CARGO','')); t.area=clean_text(r.get('AREA','')); t.activo=True; db.session.add(t); n+=1
+        db.session.commit(); flash(f'Trabajadores importados/actualizados: {n}', 'ok'); return redirect(url_for('trabajadores'))
+    q=Trabajador.query.order_by(Trabajador.nombre).limit(800).all(); rows=''.join([f"<tr><td>{t.empresa}</td><td>{t.dni}</td><td>{t.nombre}</td><td>{t.cargo}</td><td>{t.area}</td><td><span class='badge ok'>Activo</span></td></tr>" for t in q]) or '<tr><td colspan=6>Sin trabajadores.</td></tr>'
+    return render_page(f"""<div class='top'><h2>Trabajadores</h2><a class='btn btn2' href='{url_for('plantilla_trabajadores')}'>Descargar plantilla</a></div><div class='card'><h3>Registro manual</h3><form method='post' class='form'><input type='hidden' name='manual' value='1'><input name='empresa' placeholder='Empresa' value='PRIZE'><input name='dni' placeholder='DNI' required><input name='nombre' placeholder='Nombre completo' required><input name='cargo' placeholder='Cargo'><input name='area' placeholder='Área'><button>Guardar</button></form></div><br><div class='card'><h3>Carga masiva</h3><form method='post' enctype='multipart/form-data'><input type='file' name='excel' accept='.xlsx,.xls' required><br><br><button class='btn3'>Importar trabajadores</button></form></div><br><div class='card'><h3>Base de trabajadores</h3><div class='table-wrap'><table><tr><th>Empresa</th><th>DNI</th><th>Nombre</th><th>Cargo</th><th>Área</th><th>Estado</th></tr>{rows}</table></div></div>""", 'trabajadores')
 
-@app.route("/exportar_consumos")
+@app.route('/plantilla_consumos')
 @login_required
-def exportar_consumos():
-    q = Consumo.query.order_by(Consumo.fecha.desc()).all()
-    df = pd.DataFrame([{"FECHA": c.fecha, "DNI": c.dni, "TRABAJADOR": c.trabajador, "EMPRESA": c.empresa, "AREA": c.area, "TIPO": c.tipo, "CANTIDAD": c.cantidad, "PRECIO_UNITARIO": c.precio_unitario, "TOTAL": c.total, "OBSERVACION": c.observacion} for c in q])
-    output = BytesIO(); df.to_excel(output, index=False); output.seek(0)
-    return send_file(output, as_attachment=True, download_name="consumos_comedor.xlsx", mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-@app.route("/exportar_trabajadores")
-@login_required
-@roles_required("admin", "rrhh")
-def exportar_trabajadores():
-    q = Trabajador.query.order_by(Trabajador.empresa, Trabajador.nombre).all()
-    df = pd.DataFrame([{"EMPRESA": t.empresa, "DNI": t.dni, "NOMBRE": t.nombre, "CARGO": t.cargo, "AREA": t.area, "ESTADO": "ACTIVO" if t.activo else "INACTIVO"} for t in q])
-    output = BytesIO(); df.to_excel(output, index=False); output.seek(0)
-    return send_file(output, as_attachment=True, download_name="base_trabajadores_comedor.xlsx", mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-@app.route("/plantilla_trabajadores")
+def plantilla_consumos():
+    df=pd.DataFrame([{'FECHA':date.today(),'DNI':'12345678','TIPO':'Almuerzo','CANTIDAD':1,'PRECIO_UNITARIO':10,'OBSERVACION':'Pedido desde Forms'}]); output=BytesIO(); df.to_excel(output,index=False); output.seek(0); return send_file(output,as_attachment=True,download_name='plantilla_carga_consumos_forms.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+@app.route('/plantilla_trabajadores')
 @login_required
 def plantilla_trabajadores():
-    df = pd.DataFrame([{"EMPRESA": "AQU ANQA II", "DNI": "12345678", "NOMBRE": "APELLIDOS Y NOMBRES", "CARGO": "OPERARIO", "AREA": "PRODUCCION"}])
-    output = BytesIO(); df.to_excel(output, index=False); output.seek(0)
-    return send_file(output, as_attachment=True, download_name="plantilla_trabajadores_comedor.xlsx", mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    df=pd.DataFrame([{'EMPRESA':'PRIZE','DNI':'12345678','NOMBRE':'APELLIDOS Y NOMBRES','CARGO':'OPERARIO','AREA':'PRODUCCION'}]); output=BytesIO(); df.to_excel(output,index=False); output.seek(0); return send_file(output,as_attachment=True,download_name='plantilla_trabajadores.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+@app.route('/exportar_pedidos')
+@login_required
+def exportar_pedidos():
+    q=PedidoConsumo.query.order_by(PedidoConsumo.fecha.desc(), PedidoConsumo.id.desc()).all(); df=pd.DataFrame([{'FECHA':p.fecha,'DNI':p.dni,'TRABAJADOR':p.trabajador,'AREA':p.area,'TIPO':p.tipo,'CANTIDAD':p.cantidad,'TOTAL':p.total,'ESTADO':p.estado} for p in q]); output=BytesIO(); df.to_excel(output,index=False); output.seek(0); return send_file(output,as_attachment=True,download_name='pedidos_consumos_comedor.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+@app.route('/descargar_cierre/<path:filename>')
+@login_required
+def descargar_reporte_cierre(filename):
+    return send_file(os.path.join(REPORT_DIR, os.path.basename(filename)), as_attachment=True)
 
 with app.app_context():
-    db.create_all()
-    seed()
+    db.create_all(); seed()
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT',5000)), debug=True)
