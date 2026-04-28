@@ -189,8 +189,10 @@ def init_db():
             pass
 
         for username, password, role in [
-            ("admin", "admin123", "admin"),
-            ("rrhh", "rrhh123", "rrhh"),
+            ("admin1", "admin123", "admin"),
+            ("admin2", "admin123", "admin"),
+            ("admin", "admin123", "comedor"),
+            ("rrhh", "rrhh123", "comedor"),
             ("comedor", "comedor123", "comedor"),
         ]:
             existe = conn.execute("SELECT id FROM usuarios WHERE username=?", (username,)).fetchone()
@@ -343,6 +345,10 @@ def dia_cerrado(fecha_iso=None):
     return q_one("SELECT * FROM cierres WHERE fecha=?", (fecha_iso or hoy_iso(),))
 
 
+def is_super_admin():
+    return session.get("user") in ("admin1", "admin2") and session.get("role") == "admin"
+
+
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -357,7 +363,9 @@ def roles_required(*roles):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             role = session.get("role")
-            if role == "admin" or role in roles:
+            if is_super_admin():
+                return fn(*args, **kwargs)
+            if role in roles and "admin" not in roles:
                 return fn(*args, **kwargs)
             flash("No tienes permiso para esta opción.", "error")
             return redirect(url_for("dashboard"))
@@ -1061,6 +1069,77 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
 @media(max-width:1350px){.main-layout{grid-template-columns:minmax(0,1fr)!important;}.panel-right{display:none!important;}}
 @media(max-width:760px){:root{--side-w:168px;}.brand-prize{font-size:41px;}.brand-prize span{width:30px;height:30px;font-size:24px;}.hero h1{font-size:25px!important;}.hero p{font-size:14px!important;}.nav-pro a{font-size:11px!important;padding:9px 7px!important;}}
 
+
+/* =========================================================
+   MEJORA RESPONSIVE CELULAR - PANEL COMPACTO / PROCESOS CLAROS
+   ========================================================= */
+@media(max-width: 780px){
+  :root{--side-w:0px!important;}
+  html,body{height:auto!important;overflow:auto!important;background:#eef4f8!important;}
+  .app-shell{height:auto!important;min-height:100vh!important;overflow:visible!important;display:block!important;}
+  .hero{margin-left:0!important;width:100%!important;min-height:auto!important;padding:18px 14px!important;position:relative!important;border-bottom:0!important;}
+  .hero h1{font-size:28px!important;line-height:1.05!important;max-width:320px!important;margin:0 auto 6px!important;}
+  .hero p{font-size:14px!important;line-height:1.25!important;max-width:320px!important;margin:0 auto!important;}
+  .main-layout{display:block!important;margin-left:0!important;width:100%!important;height:auto!important;min-height:0!important;overflow:visible!important;}
+  .fixed-prize-sidebar{position:relative!important;inset:auto!important;width:100%!important;height:auto!important;min-height:0!important;padding:8px!important;border-radius:0!important;box-shadow:none!important;background:linear-gradient(180deg,#041827,#061b2b)!important;overflow:visible!important;}
+  .side-logo-pro,.side-user-card,.side-slogan-card,.side-title{display:none!important;}
+  .nav-pro{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:7px!important;padding:0!important;}
+  .nav-pro a{margin:0!important;min-height:42px!important;justify-content:center!important;text-align:center!important;padding:9px 7px!important;font-size:11px!important;border-radius:10px!important;background:rgba(255,255,255,.06)!important;border:1px solid rgba(255,255,255,.08)!important;}
+  .nav-pro a.on,.nav-pro a:hover{background:linear-gradient(90deg,#16834d,#0d73b8)!important;transform:none!important;}
+  .nav-ico{font-size:13px!important;width:auto!important;flex:0 0 auto!important;}
+  .nav-pro .pill{display:none!important;}
+  .content{height:auto!important;min-height:0!important;overflow:visible!important;padding:12px 10px 28px!important;background:#eef4f8!important;}
+  .panel-right{display:none!important;}
+  .topbar{display:block!important;min-height:0!important;margin-bottom:10px!important;}
+  .topbar h2{font-size:24px!important;line-height:1.1!important;}
+  .user-chip{margin-top:8px!important;gap:8px!important;}
+  .avatar{width:32px!important;height:32px!important;font-size:16px!important;}
+  .admin-actions{display:grid!important;grid-template-columns:1fr!important;gap:10px!important;}
+  .filter-grid,.form-grid,.form-grid.two,.ind-grid,.kpi-grid,.mini-kpis{display:grid!important;grid-template-columns:1fr!important;gap:10px!important;}
+  .card{padding:13px!important;border-radius:14px!important;margin-bottom:12px!important;}
+  .kpi-card{min-height:auto!important;align-items:center!important;}
+  .icon-circle{width:46px!important;height:46px!important;font-size:22px!important;}
+  .kpi-card .num{font-size:22px!important;}
+  button,.btn{width:100%!important;min-height:44px!important;padding:10px 12px!important;text-align:center!important;display:grid!important;place-items:center!important;}
+  input,select,textarea{min-height:44px!important;font-size:14px!important;}
+  .table-head{display:block!important;}
+  .table-head h3{margin-bottom:10px!important;}
+  .table-head > div{display:grid!important;grid-template-columns:1fr!important;gap:8px!important;}
+  .table-wrap{max-height:430px!important;min-height:180px!important;overflow:auto!important;border-radius:12px!important;}
+  .table-wrap table{min-width:880px!important;}
+  th,td{padding:9px 10px!important;font-size:12px!important;}
+  .flash{font-size:13px!important;padding:11px 12px!important;}
+}
+@media(max-width: 390px){.nav-pro{grid-template-columns:1fr!important;}.hero h1{font-size:24px!important;}}
+
+
+/* ===== FIX FINAL CELULAR: SIN MITAD/MITAD ===== */
+@media screen and (max-width: 900px){
+  :root{--side-w:0px!important;}
+  html, body{width:100%!important;max-width:100%!important;height:auto!important;overflow-x:hidden!important;overflow-y:auto!important;}
+  .app-shell{width:100%!important;height:auto!important;min-height:100vh!important;overflow:visible!important;display:block!important;}
+  .hero{margin-left:0!important;width:100%!important;min-height:auto!important;padding:14px 10px!important;display:block!important;text-align:center!important;}
+  .hero h1{font-size:24px!important;line-height:1.08!important;margin:0 auto 5px!important;max-width:100%!important;}
+  .hero p{font-size:13px!important;line-height:1.25!important;margin:0 auto!important;max-width:100%!important;}
+  .main-layout{display:block!important;margin-left:0!important;width:100%!important;height:auto!important;overflow:visible!important;}
+  aside.fixed-prize-sidebar{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;min-height:0!important;padding:8px!important;display:block!important;}
+  .side-logo-pro,.side-user-card,.side-slogan-card{display:none!important;}
+  .nav.nav-pro{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:6px!important;width:100%!important;}
+  .nav.nav-pro a{font-size:11px!important;min-height:40px!important;padding:8px 4px!important;margin:0!important;justify-content:center!important;border-radius:10px!important;}
+  .nav-ico{display:none!important;}
+  .content{width:100%!important;height:auto!important;overflow:visible!important;padding:10px!important;}
+  .panel-right{display:none!important;}
+  .topbar h2{font-size:22px!important;}
+  .topbar .muted{font-size:13px!important;}
+  .user-chip{font-size:13px!important;}
+  .admin-actions,.filter-grid,.form-grid,.form-grid.two,.ind-grid,.kpi-grid,.mini-kpis{display:grid!important;grid-template-columns:1fr!important;gap:9px!important;}
+  .card{width:100%!important;margin:0 0 10px!important;padding:12px!important;border-radius:14px!important;}
+  .table-wrap{width:100%!important;max-height:420px!important;overflow:auto!important;}
+  .table-wrap table{min-width:820px!important;}
+  button,.btn{width:100%!important;}
+}
+@media screen and (max-width: 430px){.nav.nav-pro{grid-template-columns:repeat(2,1fr)!important;}.hero h1{font-size:22px!important;}}
+
 </style>
 </head>
 <body>
@@ -1097,15 +1176,19 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
       </div>
 
       <nav class="nav nav-pro">
+        {% if is_super_admin() %}
         <a class="{{'on' if page=='dashboard'}}" href="{{url_for('dashboard')}}"><span class="nav-ico">📊</span>Dashboard</a>
         <a class="{{'on' if page=='consumos'}}" href="{{url_for('consumos')}}"><span class="nav-ico">🍽️</span>Consumos</a>
         <a class="{{'on' if page=='trabajadores'}}" href="{{url_for('trabajadores')}}"><span class="nav-ico">👥</span>Trabajadores</a>
         <a class="{{'on' if page=='entregas'}}" href="{{url_for('entregas')}}"><span class="nav-ico">🚚</span>Entregas <span class="pill nuevo">NUEVO</span></a>
         <a class="{{'on' if page=='reportes'}}" href="{{url_for('reportes')}}"><span class="nav-ico">📁</span>Reportes <span class="pill correo">CORREO</span></a>
-        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📁</span>Reportes Planilla</a>
+        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📁</span>Cerrar día</a>
         <a class="{{'on' if page=='carga'}}" href="{{url_for('carga_masiva')}}"><span class="nav-ico">📥</span>Carga Masiva</a>
-        {% if session.get('role') == 'admin' %}
-        <a class="{{'on' if page=='config'}}" href="{{url_for('configuracion')}}"><span class="nav-ico">⚙️</span>Config.</a>
+        <a class="{{'on' if page=='config'}}" href="{{url_for('configuracion')}}"><span class="nav-ico">⚙️</span>Usuarios/Config.</a>
+        {% else %}
+        <a class="{{'on' if page=='consumos'}}" href="{{url_for('consumos')}}"><span class="nav-ico">🍽️</span>Consumos</a>
+        <a class="{{'on' if page=='entregas'}}" href="{{url_for('entregas')}}"><span class="nav-ico">🚚</span>Entregas</a>
+        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📁</span>Cerrar día</a>
         {% endif %}
         <a class="logout-link" href="{{url_for('logout')}}"><span class="nav-ico">🚪</span>Salir</a>
       </nav>
@@ -1176,6 +1259,7 @@ def render_page(content, page=""):
         cerrado_hoy=bool(dia_cerrado()),
         fecha_hoy=fecha_peru_txt(),
         money=money,
+        is_super_admin=is_super_admin,
     )
 
 
@@ -1277,7 +1361,7 @@ def login():
         if user and check_password_hash(user["password_hash"], password):
             session["user"] = user["username"]
             session["role"] = user["role"]
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard" if is_super_admin() else "consumos"))
         flash("Usuario o clave incorrecta.", "error")
 
     html = """
@@ -1314,6 +1398,8 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
+    if not is_super_admin():
+        return redirect(url_for("consumos"))
     fecha_inicio = request.args.get("fecha_inicio") or request.args.get("fecha") or hoy_iso()
     fecha_fin = request.args.get("fecha_fin") or fecha_inicio
     buscar = clean_text(request.args.get("buscar"))
@@ -1344,7 +1430,7 @@ def dashboard():
     ]) or "<tr><td colspan='11'>Sin consumos con el filtro seleccionado.</td></tr>"
 
     admin_buttons = ""
-    if session.get("role") == "admin":
+    if is_super_admin():
         admin_buttons = f"""
         <div class="admin-actions">
           <a class="btn btn-orange" href="{url_for('cerrar_dia_manual')}">🔒 Cerrar día</a>
@@ -1403,7 +1489,7 @@ def consumos():
             flash("DNI no encontrado o trabajador inactivo.", "error")
             return redirect(url_for("consumos"))
 
-        es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
+        es_adicional = 1 if request.form.get("adicional") == "1" and is_super_admin() else 0
 
         # REGLA FUERTE: 1 DNI = 1 consumo normal por día.
         if not es_adicional:
@@ -1504,7 +1590,7 @@ def consumos():
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="10.00" {disabled}>
         <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
-        {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
+        {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if is_super_admin() else '')}
         <button {disabled}>Registrar consumo</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
@@ -1730,7 +1816,7 @@ def carga_masiva():
 
 @app.route("/trabajadores", methods=["GET", "POST"])
 @login_required
-@roles_required("admin", "rrhh")
+@roles_required("admin")
 def trabajadores():
     if request.method == "POST" and request.form.get("manual") == "1":
         dni = clean_dni(request.form.get("dni"))
@@ -1841,7 +1927,7 @@ def trabajadores():
 
 @app.route("/cierre_dia", methods=["GET", "POST"])
 @login_required
-@roles_required("admin")
+@roles_required("admin", "rrhh", "comedor")
 def cierre_dia():
     fecha = hoy_iso()
     cerrado = dia_cerrado(fecha)
@@ -1920,7 +2006,7 @@ def cierre_dia():
     """
 
     admin_extra = ""
-    if session.get("role") == "admin":
+    if is_super_admin():
         admin_extra = f"""
         <div class='admin-actions'>
           <a class='btn btn-orange' href='{url_for('cerrar_dia_manual')}'>🔒 Cerrar día</a>
@@ -2081,7 +2167,12 @@ def usuarios_admin():
 
     usuarios = q_all("SELECT username, role, active FROM usuarios ORDER BY username")
     tabla = "".join([
-        f"<tr><td>{u['username']}</td><td>{u['role']}</td><td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td></tr>"
+        f"""<tr>
+          <td>{u['username']}</td>
+          <td>{'Administrador total' if u['username'] in ('admin1','admin2') else 'Usuario operativo'}</td>
+          <td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td>
+          <td>{'' if u['username'] in ('admin1','admin2') else '<form method="post" action="' + url_for('eliminar_usuario', username=u['username']) + '" onsubmit="return confirm(\'¿Eliminar usuario?\')"><button class="btn-red" style="padding:8px 12px;min-height:36px">Eliminar</button></form>'}</td>
+        </tr>"""
         for u in usuarios
     ])
     html = topbar("Crear usuarios y claves", "Solo administrador") + f"""
@@ -2091,9 +2182,8 @@ def usuarios_admin():
         <input name="username" placeholder="Usuario" required>
         <input name="password" placeholder="Clave" required>
         <select name="role">
-          <option value="admin">admin</option>
-          <option value="rrhh">rrhh</option>
-          <option value="comedor">comedor</option>
+          <option value="comedor">usuario normal</option>
+          <option value="admin">administrador</option>
         </select>
         <label style="font-weight:900"><input type="checkbox" name="active" checked> Activo</label>
         <button>Guardar usuario</button>
@@ -2102,10 +2192,25 @@ def usuarios_admin():
     <br>
     <div class="card">
       <h3 style="margin-top:0">Usuarios registrados</h3>
-      <div class="table-wrap"><table><tr><th>Usuario</th><th>Rol</th><th>Estado</th></tr>{tabla}</table></div>
+      <div class="table-wrap"><table><tr><th>Usuario</th><th>Tipo</th><th>Estado</th><th>Acción</th></tr>{tabla}</table></div>
     </div>
     """
     return render_page(html, "config")
+
+
+@app.route("/usuarios/eliminar/<username>", methods=["POST"])
+@login_required
+@roles_required("admin")
+def eliminar_usuario(username):
+    username = clean_text(username)
+    if username in ("admin1", "admin2"):
+        flash("No se puede eliminar admin1 ni admin2.", "error")
+    elif username == session.get("user"):
+        flash("No puedes eliminar tu propio usuario.", "error")
+    else:
+        q_exec("DELETE FROM usuarios WHERE username=?", (username,))
+        flash("Usuario eliminado correctamente.", "ok")
+    return redirect(url_for("usuarios_admin"))
 
 
 # =========================
@@ -2176,4 +2281,4 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=os.getenv("FLASK_DEBUG", "0") == "1")
