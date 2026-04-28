@@ -2166,15 +2166,30 @@ def usuarios_admin():
         return redirect(url_for("usuarios_admin"))
 
     usuarios = q_all("SELECT username, role, active FROM usuarios ORDER BY username")
-    tabla = "".join([
-        f"""<tr>
-          <td>{u['username']}</td>
-          <td>{'Administrador total' if u['username'] in ('admin1','admin2') else 'Usuario operativo'}</td>
-          <td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td>
-          <td>{'' if u['username'] in ('admin1','admin2') else '<form method="post" action="' + url_for('eliminar_usuario', username=u['username']) + '" onsubmit="return confirm(\'¿Eliminar usuario?\')"><button class="btn-red" style="padding:8px 12px;min-height:36px">Eliminar</button></form>'}</td>
-        </tr>"""
-        for u in usuarios
-    ])
+    filas_usuarios = []
+    for u in usuarios:
+        username = u["username"]
+        tipo_usuario = "Administrador total" if username in ("admin1", "admin2") else "Usuario operativo"
+        badge_class = "ok" if u["active"] else "off"
+        estado_txt = "Activo" if u["active"] else "Bloqueado"
+        if username in ("admin1", "admin2"):
+            accion_html = ""
+        else:
+            eliminar_url = url_for("eliminar_usuario", username=username)
+            accion_html = (
+                f"<form method=\"post\" action=\"{eliminar_url}\" onsubmit=\"return confirm('¿Eliminar usuario?')\">"
+                "<button class=\"btn-red\" style=\"padding:8px 12px;min-height:36px\">Eliminar</button>"
+                "</form>"
+            )
+        filas_usuarios.append(
+            f"""<tr>
+              <td>{username}</td>
+              <td>{tipo_usuario}</td>
+              <td><span class=\"badge {badge_class}\">{estado_txt}</span></td>
+              <td>{accion_html}</td>
+            </tr>"""
+        )
+    tabla = "".join(filas_usuarios)
     html = topbar("Crear usuarios y claves", "Solo administrador") + f"""
     <div class="card">
       <h3 style="margin-top:0">Crear / actualizar usuario</h3>
