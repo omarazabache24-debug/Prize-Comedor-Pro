@@ -1,13 +1,11 @@
-# Sistema Comedor PRIZE - listo para GitHub + Render
+# Sistema Comedor PRIZE - versión mejorada
 
-## Archivos incluidos
-- `app.py`: aplicación Flask completa.
-- `requirements.txt`: dependencias para Render.
-- `runtime.txt`: versión Python.
-- `Procfile`: comando para iniciar con Gunicorn.
-- `static/logo.png` y `static/logo.jpeg`: logo usado por login y panel interno.
-- `reportes_cierre/`: carpeta donde se guardan los cierres diarios.
-- `uploads/`: carpeta para archivos temporales.
+Incluye mejoras visuales del login y panel interno según la imagen enviada:
+
+- Login moderno con logo PRIZE, panel formal, usuarios demo y onda inferior.
+- Dashboard interno con cabecera, menú lateral, pestañas rápidas, panel derecho y tarjetas KPI.
+- Logo cargado desde `static/logo.png` con parámetro anti-cache `?v=12`.
+- Funciones existentes conservadas: consumos, entregas por DNI, carga masiva Excel, trabajadores, cierre de día y reporte por correo.
 
 ## Render
 Build Command:
@@ -19,21 +17,11 @@ Start Command:
 gunicorn app:app
 ```
 
-## Variables recomendadas
-- `DATABASE_URL`: PostgreSQL de Render.
-- `SECRET_KEY`: clave secreta.
-- `SMTP_HOST`: servidor SMTP.
-- `SMTP_PORT`: 587.
-- `SMTP_USER`: correo usuario.
-- `SMTP_PASSWORD`: clave/app password.
-- `SMTP_FROM`: correo remitente.
-- `REPORTE_DESTINO`: correo por defecto para cierre.
-
 ## Usuarios iniciales
 - admin / admin123
 - rrhh / rrhh123
 - comedor / comedor123
 
-## Nota importante
-Sube TODO el contenido del ZIP al repositorio, incluyendo la carpeta `static`.
-En Render usa: **Manual Deploy -> Clear build cache & deploy** para que tome el logo nuevo.
+## Importante si Render sigue mostrando la pantalla antigua
+En Render ejecutar: **Manual Deploy → Clear build cache & deploy**.
+También presionar `Ctrl + F5` en el navegador.
