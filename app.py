@@ -20,6 +20,11 @@ import os
 import re
 import sqlite3
 import smtplib
+try:
+    import psycopg2
+    import psycopg2.extras
+except Exception:
+    psycopg2 = None
 from io import BytesIO
 from datetime import datetime, date
 from functools import wraps
@@ -43,6 +48,8 @@ REPORT_DIR = os.path.join(BASE_DIR, "reportes_cierre")
 CONCESIONARIA_DIR = os.path.join(BASE_DIR, "consumos_concesionaria")
 ENTREGAS_DIR = os.path.join(BASE_DIR, "reportes_entrega")
 DB_PATH = os.path.join(BASE_DIR, "comedor_prize.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL)
 
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -55,203 +62,267 @@ app.secret_key = os.getenv("SECRET_KEY", "prize-comedor-pro-2026")
 
 
 # =========================
-# BASE DE DATOS SQLITE
+# BASE DE DATOS PERSISTENTE
+# Render: PostgreSQL con DATABASE_URL. Local: SQLite de respaldo.
 # =========================
+def _sql(sql):
+    return sql.replace("?", "%s") if USE_POSTGRES else sql
+
 def get_conn():
+    if USE_POSTGRES:
+        if psycopg2 is None:
+            raise RuntimeError("Falta psycopg2-binary en requirements.txt")
+        return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def q_all(sql, params=()):
     with get_conn() as conn:
+        if USE_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(_sql(sql), params)
+                return cur.fetchall()
         return conn.execute(sql, params).fetchall()
 
-
 def q_one(sql, params=()):
-    with get_conn() as conn:
-        return conn.execute(sql, params).fetchone()
-
+    rows = q_all(sql, params)
+    return rows[0] if rows else None
 
 def q_exec(sql, params=()):
     with get_conn() as conn:
+        if USE_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(_sql(sql), params)
+                conn.commit()
+                return None
         cur = conn.execute(sql, params)
         conn.commit()
         return cur.lastrowid
 
-
-
 def audit_event(accion, tabla='', registro_id='', detalle=''):
     try:
-        q_exec(
-            "INSERT INTO auditoria(usuario,accion,tabla,registro_id,detalle) VALUES(?,?,?,?,?)",
-            (session.get('user','sistema'), accion, tabla, str(registro_id or ''), detalle or '')
-        )
+        q_exec("INSERT INTO auditoria(usuario,accion,tabla,registro_id,detalle) VALUES(?,?,?,?,?)",
+               (session.get('user','sistema'), accion, tabla, str(registro_id or ''), detalle or ''))
     except Exception:
         pass
 
 def init_db():
-    with get_conn() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            password_plain TEXT DEFAULT '',
-            role TEXT NOT NULL DEFAULT 'comedor',
-            active INTEGER NOT NULL DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS trabajadores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            empresa TEXT DEFAULT 'PRIZE',
-            dni TEXT UNIQUE NOT NULL,
-            nombre TEXT NOT NULL,
-            cargo TEXT DEFAULT '',
-            area TEXT DEFAULT '',
-            activo INTEGER NOT NULL DEFAULT 1,
-            creado TEXT DEFAULT CURRENT_TIMESTAMP,
-            actualizado TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS consumos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT NOT NULL,
-            hora TEXT NOT NULL,
-            dni TEXT NOT NULL,
-            trabajador TEXT DEFAULT '',
-            empresa TEXT DEFAULT 'PRIZE',
-            area TEXT DEFAULT '',
-            tipo TEXT DEFAULT 'Almuerzo',
-            cantidad INTEGER DEFAULT 1,
-            precio_unitario REAL DEFAULT 10,
-            total REAL DEFAULT 10,
-            observacion TEXT DEFAULT '',
-            estado TEXT DEFAULT 'PENDIENTE',
-            creado_por TEXT DEFAULT '',
-            entregado_por TEXT DEFAULT '',
-            entregado_en TEXT DEFAULT ''
-        );
-
-        CREATE TABLE IF NOT EXISTS auditoria (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP,
-            usuario TEXT DEFAULT '',
-            accion TEXT DEFAULT '',
-            tabla TEXT DEFAULT '',
-            registro_id TEXT DEFAULT '',
-            detalle TEXT DEFAULT ''
-        );
-
-        CREATE TABLE IF NOT EXISTS cierres (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha TEXT UNIQUE NOT NULL,
-            cerrado_por TEXT DEFAULT '',
-            cerrado_en TEXT DEFAULT CURRENT_TIMESTAMP,
-            total_consumos INTEGER DEFAULT 0,
-            total_entregados INTEGER DEFAULT 0,
-            total_pendientes INTEGER DEFAULT 0,
-            total_importe REAL DEFAULT 0,
-            archivo_excel TEXT DEFAULT '',
-            correo_destino TEXT DEFAULT '',
-            correo_estado TEXT DEFAULT ''
-        );
-
-        CREATE TABLE IF NOT EXISTS importaciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP,
-            archivo TEXT DEFAULT '',
-            total INTEGER DEFAULT 0,
-            creados INTEGER DEFAULT 0,
-            errores INTEGER DEFAULT 0,
-            usuario TEXT DEFAULT ''
-        );
-
-        CREATE TABLE IF NOT EXISTS configuracion (
-            clave TEXT PRIMARY KEY,
-            valor TEXT DEFAULT ''
-        );
-        """)
-
-
-        # Migración usuarios: conserva clave visible solo para administración interna.
-        user_cols = [x["name"] for x in conn.execute("PRAGMA table_info(usuarios)").fetchall()]
-        if "password_plain" not in user_cols:
-            conn.execute("ALTER TABLE usuarios ADD COLUMN password_plain TEXT DEFAULT ''")
-
-
-        # Migraciones consumo pro
-        cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
-        for col, sqltype, default in [
-            ("comedor", "TEXT", "'Comedor 01'"),
-            ("fundo", "TEXT", "'Kawsay Allpa'"),
-            ("responsable", "TEXT", "''"),
-            ("adicional", "INTEGER", "0"),
-        ]:
-            if col not in cols:
-                conn.execute(f"ALTER TABLE consumos ADD COLUMN {col} {sqltype} DEFAULT {default}")
-
-        defaults = {
-            "bloqueo_activo": "0",
-            "hora_inicio": "00:00",
-            "hora_fin": "23:59",
-            "clave_quitar": "1234",
-        }
-        for k, v in defaults.items():
-            existe = conn.execute("SELECT clave FROM configuracion WHERE clave=?", (k,)).fetchone()
-            if not existe:
-                conn.execute("INSERT INTO configuracion(clave,valor) VALUES(?,?)", (k, v))
-
-        # Elimina duplicados antiguos normales del mismo día/DNI dejando el primero.
-        try:
-            conn.execute("""
-                DELETE FROM consumos
-                WHERE id NOT IN (
-                    SELECT MIN(id) FROM consumos WHERE COALESCE(adicional,0)=0 GROUP BY fecha,dni
-                    UNION
-                    SELECT id FROM consumos WHERE COALESCE(adicional,0)=1
-                )
+    if USE_POSTGRES:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS usuarios (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    password_plain TEXT DEFAULT '',
+                    role TEXT NOT NULL DEFAULT 'comedor',
+                    active INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE IF NOT EXISTS trabajadores (
+                    id SERIAL PRIMARY KEY,
+                    empresa TEXT DEFAULT 'PRIZE',
+                    dni TEXT UNIQUE NOT NULL,
+                    nombre TEXT NOT NULL,
+                    cargo TEXT DEFAULT '',
+                    area TEXT DEFAULT '',
+                    activo INTEGER NOT NULL DEFAULT 1,
+                    creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    actualizado TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS consumos (
+                    id SERIAL PRIMARY KEY,
+                    fecha TEXT NOT NULL,
+                    hora TEXT NOT NULL,
+                    dni TEXT NOT NULL,
+                    trabajador TEXT DEFAULT '',
+                    empresa TEXT DEFAULT 'PRIZE',
+                    area TEXT DEFAULT '',
+                    tipo TEXT DEFAULT 'Almuerzo',
+                    cantidad INTEGER DEFAULT 1,
+                    precio_unitario REAL DEFAULT 10,
+                    total REAL DEFAULT 10,
+                    observacion TEXT DEFAULT '',
+                    estado TEXT DEFAULT 'PENDIENTE',
+                    creado_por TEXT DEFAULT '',
+                    entregado_por TEXT DEFAULT '',
+                    entregado_en TEXT DEFAULT '',
+                    comedor TEXT DEFAULT 'Comedor 01',
+                    fundo TEXT DEFAULT 'Kawsay Allpa',
+                    responsable TEXT DEFAULT '',
+                    adicional INTEGER DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS auditoria (
+                    id SERIAL PRIMARY KEY,
+                    fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    usuario TEXT DEFAULT '',
+                    accion TEXT DEFAULT '',
+                    tabla TEXT DEFAULT '',
+                    registro_id TEXT DEFAULT '',
+                    detalle TEXT DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS cierres (
+                    id SERIAL PRIMARY KEY,
+                    fecha TEXT UNIQUE NOT NULL,
+                    cerrado_por TEXT DEFAULT '',
+                    cerrado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    total_consumos INTEGER DEFAULT 0,
+                    total_entregados INTEGER DEFAULT 0,
+                    total_pendientes INTEGER DEFAULT 0,
+                    total_importe REAL DEFAULT 0,
+                    archivo_excel TEXT DEFAULT '',
+                    correo_destino TEXT DEFAULT '',
+                    correo_estado TEXT DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS importaciones (
+                    id SERIAL PRIMARY KEY,
+                    fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    archivo TEXT DEFAULT '',
+                    total INTEGER DEFAULT 0,
+                    creados INTEGER DEFAULT 0,
+                    errores INTEGER DEFAULT 0,
+                    usuario TEXT DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS configuracion (
+                    clave TEXT PRIMARY KEY,
+                    valor TEXT DEFAULT ''
+                );
+                """)
+                for stmt in [
+                    "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_plain TEXT DEFAULT ''",
+                    "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS comedor TEXT DEFAULT 'Comedor 01'",
+                    "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS fundo TEXT DEFAULT 'Kawsay Allpa'",
+                    "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS responsable TEXT DEFAULT ''",
+                    "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS adicional INTEGER DEFAULT 0",
+                ]:
+                    cur.execute(stmt)
+                cur.execute("""
+                    DELETE FROM consumos c USING consumos d
+                    WHERE COALESCE(c.adicional,0)=0 AND COALESCE(d.adicional,0)=0
+                      AND c.fecha=d.fecha AND c.dni=d.dni AND c.id>d.id
+                """)
+                cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_consumo_unico_dni_fecha ON consumos(fecha, dni) WHERE COALESCE(adicional,0)=0")
+                conn.commit()
+    else:
+        with get_conn() as conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_plain TEXT DEFAULT '',
+                role TEXT NOT NULL DEFAULT 'comedor',
+                active INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS trabajadores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                empresa TEXT DEFAULT 'PRIZE',
+                dni TEXT UNIQUE NOT NULL,
+                nombre TEXT NOT NULL,
+                cargo TEXT DEFAULT '',
+                area TEXT DEFAULT '',
+                activo INTEGER NOT NULL DEFAULT 1,
+                creado TEXT DEFAULT CURRENT_TIMESTAMP,
+                actualizado TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS consumos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT NOT NULL,
+                hora TEXT NOT NULL,
+                dni TEXT NOT NULL,
+                trabajador TEXT DEFAULT '',
+                empresa TEXT DEFAULT 'PRIZE',
+                area TEXT DEFAULT '',
+                tipo TEXT DEFAULT 'Almuerzo',
+                cantidad INTEGER DEFAULT 1,
+                precio_unitario REAL DEFAULT 10,
+                total REAL DEFAULT 10,
+                observacion TEXT DEFAULT '',
+                estado TEXT DEFAULT 'PENDIENTE',
+                creado_por TEXT DEFAULT '',
+                entregado_por TEXT DEFAULT '',
+                entregado_en TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS auditoria (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP,
+                usuario TEXT DEFAULT '',
+                accion TEXT DEFAULT '',
+                tabla TEXT DEFAULT '',
+                registro_id TEXT DEFAULT '',
+                detalle TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS cierres (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT UNIQUE NOT NULL,
+                cerrado_por TEXT DEFAULT '',
+                cerrado_en TEXT DEFAULT CURRENT_TIMESTAMP,
+                total_consumos INTEGER DEFAULT 0,
+                total_entregados INTEGER DEFAULT 0,
+                total_pendientes INTEGER DEFAULT 0,
+                total_importe REAL DEFAULT 0,
+                archivo_excel TEXT DEFAULT '',
+                correo_destino TEXT DEFAULT '',
+                correo_estado TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS importaciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP,
+                archivo TEXT DEFAULT '',
+                total INTEGER DEFAULT 0,
+                creados INTEGER DEFAULT 0,
+                errores INTEGER DEFAULT 0,
+                usuario TEXT DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS configuracion (
+                clave TEXT PRIMARY KEY,
+                valor TEXT DEFAULT ''
+            );
             """)
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_consumo_unico_dni_fecha ON consumos(fecha, dni) WHERE adicional=0")
-        except Exception:
-            pass
+            user_cols = [x["name"] for x in conn.execute("PRAGMA table_info(usuarios)").fetchall()]
+            if "password_plain" not in user_cols:
+                conn.execute("ALTER TABLE usuarios ADD COLUMN password_plain TEXT DEFAULT ''")
+            cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
+            for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0")]:
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE consumos ADD COLUMN {col} {sqltype} DEFAULT {default}")
+            try:
+                conn.execute("""
+                    DELETE FROM consumos
+                    WHERE id NOT IN (
+                        SELECT MIN(id) FROM consumos WHERE COALESCE(adicional,0)=0 GROUP BY fecha,dni
+                        UNION
+                        SELECT id FROM consumos WHERE COALESCE(adicional,0)=1
+                    )
+                """)
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_consumo_unico_dni_fecha ON consumos(fecha, dni) WHERE adicional=0")
+            except Exception:
+                pass
+            conn.commit()
 
-        for username, password, role in [
-            ("adm", "@123", "admin"),
-            ("adm1", "adm1", "admin"),
-            ("adm2", "adm2", "admin"),
-            ("admin", "admin123", "admin"),
-            ("comedor", "comedor123", "comedor"),
-        ]:
-            existe = conn.execute("SELECT id FROM usuarios WHERE username=?", (username,)).fetchone()
-            if not existe:
-                conn.execute(
-                    "INSERT INTO usuarios(username,password_hash,password_plain,role,active) VALUES(?,?,?,?,1)",
-                    (username, generate_password_hash(password), password, role),
-                )
-            elif username in ("adm", "adm1", "adm2"):
-                # Garantiza que los usuarios administradores principales siempre tengan control total.
-                conn.execute(
-                    "UPDATE usuarios SET role='admin', active=1, password_hash=?, password_plain=? WHERE username=?",
-                    (generate_password_hash(password), password, username),
-                )
+    defaults = {"bloqueo_activo": "0", "hora_inicio": "00:00", "hora_fin": "23:59", "clave_quitar": "1234"}
+    for k, v in defaults.items():
+        if not q_one("SELECT clave FROM configuracion WHERE clave=?", (k,)):
+            q_exec("INSERT INTO configuracion(clave,valor) VALUES(?,?)", (k, v))
 
-        # Datos demo para que la interfaz no salga vacía
-        demos = [
-            ("PRIZE", "74324033", "AZABACHE LUJAN, OMAR EDUARDO", "OPERARIO", "PRODUCCION"),
-            ("PRIZE", "45148597", "CONCEPCION ZAVALETA, VICTOR", "OPERARIO", "PRODUCCION"),
-            ("PRIZE", "47625779", "HUAYLLA NACARINO, RAUL", "OPERARIO", "PRODUCCION"),
-            ("PRIZE", "41678684", "TANTALLEAN PINILLOS, ERNESTO", "OPERARIO", "PRODUCCION"),
-            ("PRIZE", "80503598", "LLANOS VASQUEZ, SEGUNDO", "OPERARIO", "PRODUCCION"),
-        ]
-        for emp, dni, nom, cargo, area in demos:
-            existe = conn.execute("SELECT id FROM trabajadores WHERE dni=?", (dni,)).fetchone()
-            if not existe:
-                conn.execute(
-                    "INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)",
-                    (emp, dni, nom, cargo, area),
-                )
-        conn.commit()
+    for username, password, role in [("adm", "@123", "admin"), ("adm1", "adm1", "admin"), ("adm2", "adm2", "admin"), ("admin", "admin123", "admin"), ("comedor", "comedor123", "comedor")]:
+        existe = q_one("SELECT id FROM usuarios WHERE username=?", (username,))
+        if not existe:
+            q_exec("INSERT INTO usuarios(username,password_hash,password_plain,role,active) VALUES(?,?,?,?,1)", (username, generate_password_hash(password), password, role))
+        elif username in ("adm", "adm1", "adm2"):
+            q_exec("UPDATE usuarios SET role='admin', active=1, password_hash=?, password_plain=? WHERE username=?", (generate_password_hash(password), password, username))
+
+    demos = [
+        ("PRIZE", "74324033", "AZABACHE LUJAN, OMAR EDUARDO", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "45148597", "CONCEPCION ZAVALETA, VICTOR", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "47625779", "HUAYLLA NACARINO, RAUL", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "41678684", "TANTALLEAN PINILLOS, ERNESTO", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "80503598", "LLANOS VASQUEZ, SEGUNDO", "OPERARIO", "PRODUCCION"),
+    ]
+    for emp, dni, nom, cargo, area in demos:
+        if not q_one("SELECT id FROM trabajadores WHERE dni=?", (dni,)):
+            q_exec("INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)", (emp, dni, nom, cargo, area))
 
 
 # =========================
@@ -1569,21 +1640,6 @@ def consumos():
             flash(msg, "error")
             return redirect(url_for("consumos"))
 
-        dni = clean_dni(request.form.get("dni"))
-        trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
-        if not trabajador:
-            flash("DNI no encontrado o trabajador inactivo.", "error")
-            return redirect(url_for("consumos"))
-
-        es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
-
-        # REGLA FUERTE: 1 DNI = 1 consumo normal por día.
-        if not es_adicional:
-            duplicado = q_one("SELECT id,hora,tipo FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni))
-            if duplicado:
-                flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy a las {duplicado['hora']}. Solo el admin puede registrar adicional.", "error")
-                return redirect(url_for("consumos"))
-
         tipo = request.form.get("tipo", "Almuerzo")
         if tipo not in ["Almuerzo", "Dieta"]:
             tipo = "Almuerzo"
@@ -1598,6 +1654,56 @@ def consumos():
         precio = float(request.form.get("precio_unitario") or 10)
         total = cantidad * precio
         obs = clean_text(request.form.get("observacion"))
+        es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
+
+        # REGISTRO MASIVO / EN LOTE desde la misma pestaña Consumos.
+        if request.form.get("modo_lote") == "1":
+            lote_raw = request.form.get("dni_lote", "")
+            dnis = []
+            for part in re.split(r"[\s,;]+", lote_raw):
+                d = clean_dni(part)
+                if d and d not in dnis:
+                    dnis.append(d)
+            if not dnis:
+                flash("Activa registro masivo, pero no ingresaste DNI válidos en lote.", "error")
+                return redirect(url_for("consumos", fecha=fecha))
+            creados, errores = 0, []
+            for dni in dnis:
+                trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+                if not trabajador:
+                    errores.append(f"{dni}: DNI no encontrado o errado")
+                    continue
+                if not es_adicional and q_one("SELECT id FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni)):
+                    errores.append(f"{dni}: ya tiene consumo registrado hoy")
+                    continue
+                try:
+                    q_exec("""
+                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"]))
+                    creados += 1
+                except Exception as e:
+                    errores.append(f"{dni}: no se pudo registrar")
+            msg = f"Registro masivo terminado: {creados} consumo(s) registrado(s)."
+            if errores:
+                msg += " Alertas: " + " | ".join(errores[:12])
+                if len(errores) > 12:
+                    msg += f" | y {len(errores)-12} más."
+            flash(msg, "ok" if not errores else "error")
+            return redirect(url_for("consumos", fecha=fecha))
+
+        dni = clean_dni(request.form.get("dni"))
+        trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+        if not trabajador:
+            flash("DNI no encontrado o trabajador inactivo.", "error")
+            return redirect(url_for("consumos"))
+
+        # REGLA FUERTE: 1 DNI = 1 consumo normal por día.
+        if not es_adicional:
+            duplicado = q_one("SELECT id,hora,tipo FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni))
+            if duplicado:
+                flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy a las {duplicado['hora']}. Solo el admin puede registrar adicional.", "error")
+                return redirect(url_for("consumos"))
 
         try:
             q_exec("""
@@ -1673,6 +1779,7 @@ def consumos():
       <form method="post" class="form-grid">
         <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige una fecha para consultar. Solo hoy permite registrar." max="{hoy_iso()}">
         <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" oninput="buscarTrabajadorConsumo()" {disabled}>
+        <button type="button" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Escanear QR</button>
         <input id="nombre_trabajador" class="worker-name-field" placeholder="Nombre completo del trabajador" readonly title="Nombre completo del trabajador" {disabled}>
         <select name="comedor" {disabled}>
           {''.join([f'<option>{c}</option>' for c in opciones_comedor()])}
@@ -1688,7 +1795,9 @@ def consumos():
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="10.00" {disabled}>
         <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
+        <label style="font-weight:900"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" onchange="toggleLote()"> Registro masivo / lote</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
+        <textarea id="dni_lote" name="dni_lote" placeholder="Pegue aquí DNI por línea, separados por coma, espacio o lector QR múltiple. Se validará cada DNI registrado." style="display:none;grid-column:1/-1;min-height:110px"></textarea>
         <button {disabled}>Registrar consumo</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
@@ -1707,7 +1816,36 @@ def consumos():
         out.title = d.ok ? d.nombre : '';
       }}catch(e){{ out.value='No se pudo validar DNI'; }}
     }}
+    function toggleLote(){{
+      const on = document.getElementById('modo_lote')?.checked;
+      const box = document.getElementById('dni_lote');
+      const dni = document.getElementById('dni_consumo');
+      if(box) box.style.display = on ? 'block' : 'none';
+      if(dni) dni.required = !on;
+    }}
+    async function abrirScannerQR(){{
+      const cont = document.getElementById('qr-reader');
+      if(!cont) return;
+      cont.style.display='block';
+      if(!window.Html5Qrcode){{ alert('No se cargó el lector QR. Verifica internet o usa digitación.'); return; }}
+      try{{
+        const qr = new Html5Qrcode('qr-reader');
+        await qr.start({{ facingMode: 'environment' }}, {{ fps: 10, qrbox: 240 }}, decoded => {{
+          const dni = (decoded || '').replace(/\D/g,'').slice(0,8);
+          if(document.getElementById('modo_lote')?.checked){{
+            const box = document.getElementById('dni_lote');
+            box.value += (box.value.trim() ? '\n' : '') + dni;
+          }} else {{
+            document.getElementById('dni_consumo').value = dni;
+            buscarTrabajadorConsumo();
+          }}
+          qr.stop(); cont.style.display='none';
+        }});
+      }}catch(e){{ alert('No se pudo abrir cámara QR. Revisa permisos del celular.'); }}
+    }}
     </script>
+    <script src="https://unpkg.com/html5-qrcode" defer></script>
+    <div id="qr-reader" style="display:none;width:320px;max-width:100%;margin:10px 0"></div>
 
     <br>
     {filtros}

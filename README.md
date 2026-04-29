@@ -46,3 +46,17 @@ Si no configuras SMTP, el sistema genera el registro en `reportes_cierre/notific
 - Botones de entrega corregidos: seleccionado y todos.
 - Cierre por fecha seleccionable, con correo y hora de referencia para envío del Excel.
 - Al elegir una fecha nueva se trabaja desde cero; al elegir una fecha cerrada se muestra su reporte histórico.
+
+## Actualización PRO PostgreSQL + Lote + QR
+
+Cambios incluidos:
+- Persistencia en PostgreSQL para Render mediante `DATABASE_URL`. Ya no depende de archivos locales para usuarios, consumos, entregas y cierres.
+- `render.yaml` crea/usa una base PostgreSQL llamada `comedor-prize-db` y conecta `DATABASE_URL` automáticamente.
+- Registro masivo/en lote desde la pestaña Consumos con check "Registro masivo / lote". Valida cada DNI contra trabajadores activos y avisa DNI errados, no encontrados o duplicados.
+- Escáner QR desde celular usando la cámara. El QR debe contener el DNI o un texto con el DNI.
+- En local, si no existe `DATABASE_URL`, el sistema sigue funcionando con SQLite.
+
+Importante para Render:
+1. Subir todo el proyecto a GitHub.
+2. En Render crear desde Blueprint usando este `render.yaml`, o crear una base PostgreSQL y colocar su `DATABASE_URL` en Environment.
+3. Las imágenes/logos pueden quedar en `/static`, pero la información del sistema queda en PostgreSQL.
