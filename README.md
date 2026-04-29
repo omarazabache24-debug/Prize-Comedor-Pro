@@ -38,3 +38,11 @@ Variables opcionales en Render:
 - SMTP_FROM=tu_correo@gmail.com
 
 Si no configuras SMTP, el sistema genera el registro en `reportes_cierre/notificaciones_usuarios.txt`.
+
+## Mejoras aplicadas - versión control consumos/cierre
+- Administradores pueden quitar consumos registrados desde cualquier equipo conectado.
+- Validación dinámica de DNI: al digitar DNI se muestra el trabajador.
+- Responsable obligatorio en mayúsculas para registrar consumo.
+- Botones de entrega corregidos: seleccionado y todos.
+- Cierre por fecha seleccionable, con correo y hora de referencia para envío del Excel.
+- Al elegir una fecha nueva se trabaja desde cero; al elegir una fecha cerrada se muestra su reporte histórico.

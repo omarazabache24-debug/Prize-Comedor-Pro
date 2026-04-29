@@ -1537,6 +1537,16 @@ def dashboard():
     return render_page(html, "dashboard")
 
 
+
+@app.route("/api/trabajador/<dni>")
+@login_required
+def api_trabajador(dni):
+    dni = clean_dni(dni)
+    t = q_one("SELECT dni,nombre,empresa,area,cargo FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+    if not t:
+        return jsonify({"ok": False, "msg": "DNI no encontrado"})
+    return jsonify({"ok": True, "dni": t["dni"], "nombre": t["nombre"], "empresa": t["empresa"], "area": t["area"], "cargo": t["cargo"]})
+
 @app.route("/consumos", methods=["GET", "POST"])
 @login_required
 @roles_required("admin", "rrhh", "comedor")
@@ -1574,7 +1584,10 @@ def consumos():
 
         comedor = request.form.get("comedor", "Comedor 01")
         fundo = request.form.get("fundo", "Kawsay Allpa")
-        responsable = clean_text(request.form.get("responsable"))
+        responsable = clean_text(request.form.get("responsable")).upper()
+        if not responsable:
+            flash("El campo RESPONSABLE es obligatorio y debe ir en MAYÚSCULAS.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
         cantidad = int(float(request.form.get("cantidad") or 1))
         precio = float(request.form.get("precio_unitario") or 10)
         total = cantidad * precio
@@ -1645,7 +1658,8 @@ def consumos():
       <h3 style="margin-top:0">Registrar consumo</h3>
       <form method="post" class="form-grid">
         <input type="date" name="fecha" value="{fecha}" {disabled}>
-        <input name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" {disabled}>
+        <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" oninput="buscarTrabajadorConsumo()" {disabled}>
+        <input id="nombre_trabajador" placeholder="Nombre del trabajador" readonly style="font-weight:900;background:#eef9f1" {disabled}>
         <select name="comedor" {disabled}>
           {''.join([f'<option>{c}</option>' for c in opciones_comedor()])}
         </select>
@@ -1656,7 +1670,7 @@ def consumos():
         <select name="fundo" {disabled}>
           {''.join([f'<option>{f}</option>' for f in opciones_fundo()])}
         </select>
-        <input name="responsable" placeholder="Responsable" {disabled}>
+        <input name="responsable" placeholder="RESPONSABLE (OBLIGATORIO MAYÚSCULAS)" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" {disabled}>
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="10.00" {disabled}>
         <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
@@ -1664,8 +1678,21 @@ def consumos():
         <button {disabled}>Registrar consumo</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
-      <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. El lector QR funciona como teclado: escanea el QR y llena el DNI.</p>
+      <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. Al digitar el DNI aparecerá automáticamente el nombre del trabajador.</p>
     </div>
+    <script>
+    async function buscarTrabajadorConsumo(){{
+      const dni = (document.getElementById('dni_consumo')?.value || '').replace(/\D/g,'');
+      const out = document.getElementById('nombre_trabajador');
+      if(!out) return;
+      if(dni.length < 8){{ out.value=''; return; }}
+      try{{
+        const r = await fetch('/api/trabajador/' + encodeURIComponent(dni));
+        const d = await r.json();
+        out.value = d.ok ? d.nombre : 'DNI no encontrado';
+      }}catch(e){{ out.value='No se pudo validar DNI'; }}
+    }}
+    </script>
 
     <br>
     {filtros}
@@ -1704,7 +1731,7 @@ def quitar_consumo():
         return redirect(request.referrer or url_for("consumos"))
 
     clave = request.form.get("clave")
-    if not require_remove_key(clave):
+    if session.get("role") != "admin" and not require_remove_key(clave):
         flash("Clave incorrecta. No se quitó el consumo.", "error")
         return redirect(request.referrer or url_for("consumos"))
 
@@ -1722,7 +1749,7 @@ def quitar_consumo():
 @login_required
 @roles_required("admin", "rrhh", "comedor")
 def api_entregas_pedidos():
-    fecha = hoy_iso()
+    fecha = request.args.get("fecha") or hoy_iso()
     dni = clean_dni(request.args.get("dni"))
     if dni:
         rows = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni))
@@ -1741,23 +1768,31 @@ def api_entregas_pedidos():
 @login_required
 @roles_required("admin", "rrhh", "comedor")
 def entregas():
-    fecha = hoy_iso()
+    fecha = request.values.get("fecha") or hoy_iso()
     dni = clean_dni(request.values.get("dni"))
 
     if request.method == "POST":
         if dia_cerrado(fecha):
             flash("Día cerrado. No se pueden entregar más pedidos.", "error")
-            return redirect(url_for("entregas"))
+            return redirect(url_for("entregas", fecha=fecha, dni=dni))
         ids = request.form.getlist("ids")
+        if request.form.get("entregar_todos") == "1":
+            if dni:
+                ids = [str(r["id"]) for r in q_all("SELECT id FROM consumos WHERE fecha=? AND dni=? AND estado='PENDIENTE'", (fecha, dni))]
+            else:
+                ids = [str(r["id"]) for r in q_all("SELECT id FROM consumos WHERE fecha=? AND estado='PENDIENTE'", (fecha,))]
+        if not ids:
+            flash("No hay pedidos pendientes seleccionados para entregar.", "error")
+            return redirect(url_for("entregas", dni=dni, fecha=fecha))
         for id_ in ids:
             q_exec("UPDATE consumos SET estado='ENTREGADO', entregado_por=?, entregado_en=? WHERE id=? AND estado='PENDIENTE'",
                    (session["user"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id_))
             audit_event("ENTREGAR_PEDIDO", "consumos", id_, f"DNI {dni}")
         flash(f"Pedidos entregados: {len(ids)}", "ok")
-        return redirect(url_for("entregas", dni=dni))
+        return redirect(url_for("entregas", dni=dni, fecha=fecha))
 
     trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,)) if dni else None
-    pedidos = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni)) if dni else []
+    pedidos = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni)) if dni else q_all("SELECT * FROM consumos WHERE fecha=? ORDER BY CASE estado WHEN 'PENDIENTE' THEN 0 ELSE 1 END, hora,id", (fecha,))
 
     info = ""
     if dni and trabajador:
@@ -1787,6 +1822,7 @@ def entregas():
     html = topbar("Entrega de Pedidos", "Valida el DNI y entrega los pedidos del día") + f"""
     <div class="card">
       <form method="get" class="form-grid two">
+        <input type="date" id="fecha_entrega" name="fecha" value="{fecha}">
         <input id="dni_entrega" name="dni" value="{dni}" placeholder="DNI del trabajador" autofocus>
         <button class="btn-blue">Buscar</button>
         <button type="button" class="btn-blue" onclick="refrescarEntregas()">🔄 Actualizar / refrescar</button>
@@ -1801,6 +1837,7 @@ def entregas():
         <span id="contador_pedidos" class="badge ok">{len(pedidos)} pedido(s)</span>
       </div>
       <form method="post">
+        <input type="hidden" name="fecha" value="{fecha}">
         <input type="hidden" name="dni" value="{dni}">
         <div class="table-wrap">
           <table>
@@ -1809,14 +1846,15 @@ def entregas():
           </table>
         </div>
         <br>
-        <button>Entregar seleccionado</button>
-        <button type="button" class="btn-blue" onclick="document.querySelectorAll('input[name=ids]:not(:disabled)').forEach(x=>x.checked=true)">Entregar todos</button>
+        <button name="entregar_seleccionado" value="1">Entregar seleccionado</button>
+        <button name="entregar_todos" value="1" class="btn-blue">Entregar todos</button>
       </form>
       <p class="muted small">Actualización automática activa cada 5 segundos. También puedes usar el botón Actualizar / refrescar.</p>
     </div>
     <script>
     async function refrescarEntregas(){{
       const dni = document.getElementById('dni_entrega')?.value || '';
+      const fecha = document.getElementById('fecha_entrega')?.value || '';
       // Sin DNI: muestra todos los pedidos del día. Con DNI: filtra solo ese trabajador.
       try{{
         const res = await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}`);
