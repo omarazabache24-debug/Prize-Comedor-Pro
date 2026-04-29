@@ -4,8 +4,9 @@ Sistema Comedor PRIZE - Interfaz PRO
 Archivo único app.py para Render / local.
 
 Usuarios demo:
+- adm1 / adm1
+- adm2 / adm2
 - admin / admin123
-- rrhh / rrhh123
 - comedor / comedor123
 
 Dependencias recomendadas en requirements.txt:
@@ -189,8 +190,9 @@ def init_db():
             pass
 
         for username, password, role in [
+            ("adm1", "adm1", "admin"),
+            ("adm2", "adm2", "admin"),
             ("admin", "admin123", "admin"),
-            ("rrhh", "rrhh123", "rrhh"),
             ("comedor", "comedor123", "comedor"),
         ]:
             existe = conn.execute("SELECT id FROM usuarios WHERE username=?", (username,)).fetchone()
@@ -363,6 +365,10 @@ def roles_required(*roles):
             return redirect(url_for("dashboard"))
         return wrapper
     return deco
+
+
+def asegurar_rol_usuario(role):
+    return "admin" if role == "admin" else "comedor"
 
 
 def send_report_email(to_email, subject, body, attachment_path):
@@ -1139,15 +1145,21 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
       </div>
 
       <nav class="nav nav-pro">
-        <a class="{{'on' if page=='dashboard'}}" href="{{url_for('dashboard')}}"><span class="nav-ico">📊</span>Dashboard</a>
-        <a class="{{'on' if page=='consumos'}}" href="{{url_for('consumos')}}"><span class="nav-ico">🍽️</span>Consumos</a>
-        <a class="{{'on' if page=='trabajadores'}}" href="{{url_for('trabajadores')}}"><span class="nav-ico">👥</span>Trabajadores</a>
-        <a class="{{'on' if page=='entregas'}}" href="{{url_for('entregas')}}"><span class="nav-ico">🚚</span>Entregas <span class="pill nuevo">NUEVO</span></a>
-        <a class="{{'on' if page=='reportes'}}" href="{{url_for('reportes')}}"><span class="nav-ico">📁</span>Reportes <span class="pill correo">CORREO</span></a>
-        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📁</span>Reportes Planilla</a>
-        <a class="{{'on' if page=='carga'}}" href="{{url_for('carga_masiva')}}"><span class="nav-ico">📥</span>Carga Masiva</a>
         {% if session.get('role') == 'admin' %}
-        <a class="{{'on' if page=='config'}}" href="{{url_for('configuracion')}}"><span class="nav-ico">⚙️</span>Config.</a>
+        <a class="{{'on' if page=='dashboard'}}" href="{{url_for('dashboard')}}"><span class="nav-ico">📊</span>Dashboard</a>
+        {% endif %}
+        <a class="{{'on' if page=='consumos'}}" href="{{url_for('consumos')}}"><span class="nav-ico">🍽️</span>Consumos</a>
+        {% if session.get('role') == 'admin' %}
+        <a class="{{'on' if page=='trabajadores'}}" href="{{url_for('trabajadores')}}"><span class="nav-ico">👥</span>Trabajadores</a>
+        {% endif %}
+        <a class="{{'on' if page=='entregas'}}" href="{{url_for('entregas')}}"><span class="nav-ico">🚚</span>Entregas <span class="pill nuevo">NUEVO</span></a>
+        {% if session.get('role') == 'admin' %}
+        <a class="{{'on' if page=='reportes'}}" href="{{url_for('reportes')}}"><span class="nav-ico">📁</span>Reportes <span class="pill correo">CORREO</span></a>
+        {% endif %}
+        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📁</span>Cerrar día</a>
+        {% if session.get('role') == 'admin' %}
+        <a class="{{'on' if page=='carga'}}" href="{{url_for('carga_masiva')}}"><span class="nav-ico">📥</span>Carga Masiva</a>
+        <a class="{{'on' if page=='config'}}" href="{{url_for('configuracion')}}"><span class="nav-ico">⚙️</span>Config. / Usuarios</a>
         {% endif %}
         <a class="logout-link" href="{{url_for('logout')}}"><span class="nav-ico">🚪</span>Salir</a>
       </nav>
@@ -1356,6 +1368,8 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
+    if session.get("role") != "admin":
+        return redirect(url_for("consumos"))
     fecha_inicio = request.args.get("fecha_inicio") or request.args.get("fecha") or hoy_iso()
     fecha_fin = request.args.get("fecha_fin") or fecha_inicio
     buscar = clean_text(request.args.get("buscar"))
@@ -1772,7 +1786,7 @@ def carga_masiva():
 
 @app.route("/trabajadores", methods=["GET", "POST"])
 @login_required
-@roles_required("admin", "rrhh")
+@roles_required("admin")
 def trabajadores():
     if request.method == "POST" and request.form.get("manual") == "1":
         dni = clean_dni(request.form.get("dni"))
@@ -1883,7 +1897,7 @@ def trabajadores():
 
 @app.route("/cierre_dia", methods=["GET", "POST"])
 @login_required
-@roles_required("admin")
+@roles_required("admin", "comedor", "rrhh")
 def cierre_dia():
     fecha = hoy_iso()
     cerrado = dia_cerrado(fecha)
@@ -2069,7 +2083,7 @@ def configuracion():
         flash("Configuración actualizada.", "ok")
         return redirect(url_for("configuracion"))
 
-    usuarios = q_all("SELECT username, role, active FROM usuarios ORDER BY username")
+    usuarios = q_all("SELECT id, username, role, active FROM usuarios ORDER BY username")
     usuarios_html = "".join([
         f"<tr><td>{u['username']}</td><td>{u['role']}</td><td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td></tr>"
         for u in usuarios
@@ -2104,7 +2118,7 @@ def usuarios_admin():
     if request.method == "POST":
         username = clean_text(request.form.get("username"))
         password = request.form.get("password") or ""
-        role = request.form.get("role") or "comedor"
+        role = asegurar_rol_usuario(request.form.get("role") or "comedor")
         active = 1 if request.form.get("active") else 0
         if not username or not password:
             flash("Usuario y clave son obligatorios.", "error")
@@ -2121,9 +2135,20 @@ def usuarios_admin():
             flash("Usuario creado.", "ok")
         return redirect(url_for("usuarios_admin"))
 
-    usuarios = q_all("SELECT username, role, active FROM usuarios ORDER BY username")
+    usuarios = q_all("SELECT id, username, role, active FROM usuarios ORDER BY username")
     tabla = "".join([
-        f"<tr><td>{u['username']}</td><td>{u['role']}</td><td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td></tr>"
+        f"""
+        <tr>
+          <td><b>{u['username']}</b></td>
+          <td>{'Administrador total' if u['role']=='admin' else 'Usuario operativo'}</td>
+          <td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td>
+          <td>
+            <form method='post' action='{url_for('eliminar_usuario', username=u['username'])}' onsubmit="return confirm('¿Eliminar este usuario?');" style='display:inline'>
+              <button class='btn-orange' style='padding:8px 12px' {'disabled' if u['username']==session.get('user') else ''}>Eliminar</button>
+            </form>
+          </td>
+        </tr>
+        """
         for u in usuarios
     ])
     html = topbar("Crear usuarios y claves", "Solo administrador") + f"""
@@ -2133,9 +2158,8 @@ def usuarios_admin():
         <input name="username" placeholder="Usuario" required>
         <input name="password" placeholder="Clave" required>
         <select name="role">
-          <option value="admin">admin</option>
-          <option value="rrhh">rrhh</option>
-          <option value="comedor">comedor</option>
+          <option value="comedor">Usuario operativo: Consumos / Entregas / Cerrar día</option>
+          <option value="admin">Administrador total: crear y eliminar usuarios</option>
         </select>
         <label style="font-weight:900"><input type="checkbox" name="active" checked> Activo</label>
         <button>Guardar usuario</button>
@@ -2144,10 +2168,35 @@ def usuarios_admin():
     <br>
     <div class="card">
       <h3 style="margin-top:0">Usuarios registrados</h3>
-      <div class="table-wrap"><table><tr><th>Usuario</th><th>Rol</th><th>Estado</th></tr>{tabla}</table></div>
+      <div class="table-wrap"><table><tr><th>Usuario</th><th>Nivel</th><th>Estado</th><th>Acción</th></tr>{tabla}</table></div>
     </div>
     """
     return render_page(html, "config")
+
+
+@app.route("/usuarios/eliminar/<username>", methods=["POST"])
+@login_required
+@roles_required("admin")
+def eliminar_usuario(username):
+    username = clean_text(username)
+    if username == session.get("user"):
+        flash("No puedes eliminar el usuario con el que estás conectado.", "error")
+        return redirect(url_for("usuarios_admin"))
+
+    user = q_one("SELECT * FROM usuarios WHERE username=?", (username,))
+    if not user:
+        flash("Usuario no encontrado.", "error")
+        return redirect(url_for("usuarios_admin"))
+
+    if user["role"] == "admin":
+        total_admins = q_one("SELECT COUNT(*) c FROM usuarios WHERE role='admin' AND active=1")["c"]
+        if total_admins <= 2:
+            flash("No se puede eliminar: deben quedar mínimo 2 administradores activos (adm1 y adm2).", "error")
+            return redirect(url_for("usuarios_admin"))
+
+    q_exec("DELETE FROM usuarios WHERE username=?", (username,))
+    flash(f"Usuario {username} eliminado correctamente.", "ok")
+    return redirect(url_for("usuarios_admin"))
 
 
 # =========================
