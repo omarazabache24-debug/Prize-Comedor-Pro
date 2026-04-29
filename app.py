@@ -1556,9 +1556,13 @@ def consumos():
     if request.method == "POST":
         fecha = request.form.get("fecha") or hoy_iso()
 
+        if fecha != hoy_iso():
+            flash("Solo se puede registrar consumo en la fecha actual de hoy. Las fechas anteriores o futuras son solo de consulta.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
+
         if dia_cerrado(fecha):
-            flash("El día ya está cerrado. No se puede registrar consumos.", "error")
-            return redirect(url_for("consumos"))
+            flash("El día ya está cerrado. No se puede registrar consumos. Al día siguiente el sistema abrirá automáticamente la nueva fecha.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
 
         bloqueado, msg = registro_bloqueado()
         if bloqueado and session.get("role") != "admin":
@@ -1647,19 +1651,27 @@ def consumos():
         """ for r in rows
     ]) or "<tr><td colspan='14'>Sin registros para este filtro.</td></tr>"
 
-    disabled = "disabled" if dia_cerrado(fecha) else ""
+    fecha_cerrada = bool(dia_cerrado(fecha))
+    fecha_es_hoy = (fecha == hoy_iso())
+    disabled = "disabled" if (fecha_cerrada or not fecha_es_hoy) else ""
     bloqueado, msg_bloq = registro_bloqueado()
     aviso_bloq = f"<div class='flash error'>{msg_bloq}</div>" if bloqueado and session.get("role") != "admin" else ""
+    aviso_fecha = ""
+    if fecha_cerrada:
+        aviso_fecha = "<div class='flash error'>Esta fecha está CERRADA. Puedes revisarla, pero no registrar nuevos consumos.</div>"
+    elif not fecha_es_hoy:
+        aviso_fecha = "<div class='flash error'>Fecha seleccionada solo para consulta. El registro de consumo solo está permitido en la fecha actual de hoy.</div>"
 
     filtros = filtro_bar(url_for("consumos"), fecha_inicio, fecha_fin, buscar)
 
     html = topbar("Registro y control de consumos", "Registra por digitación o lector QR usando el DNI") + f"""
     {aviso_bloq}
+    {aviso_fecha}
 
     <div class="card">
       <h3 style="margin-top:0">Registrar consumo</h3>
       <form method="post" class="form-grid">
-        <input type="date" name="fecha" value="{fecha}" {disabled}>
+        <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige una fecha para consultar. Solo hoy permite registrar." max="{hoy_iso()}">
         <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" oninput="buscarTrabajadorConsumo()" {disabled}>
         <input id="nombre_trabajador" class="worker-name-field" placeholder="Nombre completo del trabajador" readonly title="Nombre completo del trabajador" {disabled}>
         <select name="comedor" {disabled}>
@@ -1702,7 +1714,7 @@ def consumos():
 
     <div class="card">
       <div class="table-head">
-        <h3>Consumos del día {fecha_peru_txt(fecha)}</h3>
+        <h3>Consumos de la fecha {fecha_peru_txt(fecha)}</h3>
         <a class="btn btn-blue" href="{url_for('exportar_consumos')}">Exportar Excel</a>
       </div>
       <div class="table-wrap">
