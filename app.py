@@ -28,7 +28,7 @@ from email.message import EmailMessage
 import pandas as pd
 from flask import (
     Flask, request, redirect, url_for, session, send_file,
-    render_template_string, flash, jsonify
+    render_template_string, flash
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -80,6 +80,16 @@ def q_exec(sql, params=()):
         return cur.lastrowid
 
 
+
+def audit_event(accion, tabla='', registro_id='', detalle=''):
+    try:
+        q_exec(
+            "INSERT INTO auditoria(usuario,accion,tabla,registro_id,detalle) VALUES(?,?,?,?,?)",
+            (session.get('user','sistema'), accion, tabla, str(registro_id or ''), detalle or '')
+        )
+    except Exception:
+        pass
+
 def init_db():
     with get_conn() as conn:
         conn.executescript("""
@@ -120,6 +130,16 @@ def init_db():
             creado_por TEXT DEFAULT '',
             entregado_por TEXT DEFAULT '',
             entregado_en TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS auditoria (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP,
+            usuario TEXT DEFAULT '',
+            accion TEXT DEFAULT '',
+            tabla TEXT DEFAULT '',
+            registro_id TEXT DEFAULT '',
+            detalle TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS cierres (
@@ -322,13 +342,6 @@ def registro_bloqueado():
 
 def require_remove_key(clave):
     return str(clave or "").strip() == cfg_get("clave_quitar", "1234")
-
-
-def audit_event(accion, tabla="", registro_id="", detalle=""):
-    try:
-        q_exec("INSERT INTO auditoria(usuario,accion,tabla,registro_id,detalle) VALUES(?,?,?,?,?)", (session.get("user", "sistema"), accion, tabla, str(registro_id or ""), str(detalle or "")[:500]))
-    except Exception:
-        pass
 
 def opciones_comedor():
     return [f"Comedor {i:02d}" for i in range(1, 11)]
@@ -1116,15 +1129,6 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
   .flash{font-size:13px!important;padding:11px 12px!important;}
 }
 @media(max-width: 390px){.nav-pro{grid-template-columns:1fr!important;}.hero h1{font-size:24px!important;}}
-
-/* ===== NIVEL PRO COMPLETO: bloqueo visual, refresco, móvil refinado ===== */
-.badge.off{background:#eef2f7;color:#64748b;border-radius:999px;padding:7px 10px;font-weight:900;}
-@media(max-width:780px){
-  .form-grid.two{grid-template-columns:1fr!important;}
-  .form-grid.two .btn{width:100%!important;}
-  .table-wrap table{min-width:760px!important;}
-  .hero h1{font-size:26px!important;}
-}
 </style>
 </head>
 <body>
@@ -1308,22 +1312,221 @@ def rows_filtrados_desde_request(solo_entregados=False):
         where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR comedor LIKE ?)"
         b = f"%{buscar}%"
         final_params += [b, b, b, b, b]
-    rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
-    tabla_parts = []
-    for r in rows:
-        puede_quitar = (session.get("role") == "admin") or (r["estado"] != "ENTREGADO")
-        if puede_quitar:
-            accion_quitar = f"""
-            <form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center">
-              <input type="hidden" name="id" value="{r['id']}">
-              <input name="clave" placeholder="Clave" style="width:85px;padding:8px">
-              <button class="btn-red" style="padding:8px 10px">Quitar</button>
-            </form>
-            """
-        else:
-            accion_quitar = "<span class='badge off'>Bloqueado</span>"
+    rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha,hora,id", tuple(final_params))
+    return fecha_inicio, fecha_fin, buscar, rows
 
-        tabla_parts.append(f"""
+
+@app.route("/exportar_concesionaria")
+@login_required
+def exportar_concesionaria():
+    fecha_inicio, fecha_fin, buscar, rows = rows_filtrados_desde_request(False)
+    df = pd.DataFrame([dict(r) for r in rows])
+    if df.empty:
+        df = pd.DataFrame(columns=["fecha","hora","dni","trabajador","area","tipo","comedor","fundo","responsable","cantidad","total","estado"])
+    filename = f"consumos_concesionaria_{fecha_inicio.replace('-','_')}_a_{fecha_fin.replace('-','_')}.xlsx"
+    path = os.path.join(CONCESIONARIA_DIR, filename)
+    df.to_excel(path, index=False)
+    return send_file(path, as_attachment=True)
+
+
+@app.route("/reporte_entrega")
+@login_required
+def reporte_entrega():
+    fecha_inicio, fecha_fin, buscar, rows = rows_filtrados_desde_request(True)
+    df = pd.DataFrame([dict(r) for r in rows])
+    if df.empty:
+        df = pd.DataFrame(columns=["fecha","hora","dni","trabajador","area","tipo","comedor","fundo","responsable","cantidad","total","estado"])
+    filename = f"reporte_entrega_pago_{fecha_inicio.replace('-','_')}_a_{fecha_fin.replace('-','_')}.xlsx"
+    path = os.path.join(ENTREGAS_DIR, filename)
+    df.to_excel(path, index=False)
+    return send_file(path, as_attachment=True)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = clean_text(request.form.get("username"))
+        password = request.form.get("password", "")
+        user = q_one("SELECT * FROM usuarios WHERE username=? AND active=1", (username,))
+        if user and check_password_hash(user["password_hash"], password):
+            session["user"] = user["username"]
+            session["role"] = user["role"]
+            return redirect(url_for("dashboard"))
+        flash("Usuario o clave incorrecta.", "error")
+
+    html = """
+    <div class="login-page">
+      <div class="login-card">
+        <div class="login-inner">
+          <div class="logo-word">Priz<span class="e">e<span class="leaf"></span></span></div>
+          <h2 class="login-title">Sistema Comedor PRIZE</h2>
+          <p class="login-subtitle">Acceso al sistema</p>
+
+          <form method="post">
+            <div class="form-label">Usuario</div>
+            <div class="input-icon"><span>👤</span><input name="username" placeholder="Ingrese su usuario" required></div>
+
+            <div class="form-label">Clave</div>
+            <div class="input-icon"><span>🔒</span><input name="password" type="password" placeholder="Ingrese su clave" required></div>
+
+            <button class="login-button">Ingresar</button>
+          </form>
+
+        </div>
+      </div>
+    </div>
+    """
+    return render_template_string(BASE_HTML, content=html)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+@app.route("/")
+@login_required
+def dashboard():
+    if session.get("role") != "admin":
+        return redirect(url_for("consumos"))
+    fecha_inicio = request.args.get("fecha_inicio") or request.args.get("fecha") or hoy_iso()
+    fecha_fin = request.args.get("fecha_fin") or fecha_inicio
+    buscar = clean_text(request.args.get("buscar"))
+    cond, params = rango_sql(fecha_inicio, fecha_fin)
+
+    where = cond
+    final_params = list(params)
+    if buscar:
+        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR comedor LIKE ?)"
+        b = f"%{buscar}%"
+        final_params += [b, b, b, b, b]
+
+    total_filtro = q_one(f"SELECT COUNT(*) c, COALESCE(SUM(total),0) t FROM consumos WHERE {where}", tuple(final_params))
+    entregados = q_one(f"SELECT COUNT(*) c FROM consumos WHERE {where} AND estado='ENTREGADO'", tuple(final_params))["c"]
+    pendientes = q_one(f"SELECT COUNT(*) c FROM consumos WHERE {where} AND estado='PENDIENTE'", tuple(final_params))["c"]
+    trabajadores = q_one("SELECT COUNT(*) c FROM trabajadores WHERE activo=1")["c"]
+
+    rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC LIMIT 12", tuple(final_params))
+    tabla = "".join([
+        f"""
+        <tr>
+          <td>{i}</td><td>{r['fecha']}</td><td>{r['hora']}</td><td>{r['dni']}</td><td>{r['trabajador']}</td>
+          <td>{r['area']}</td><td>{r['tipo']}</td><td>{r['comedor']}</td><td>{r['fundo']}</td>
+          <td>{r['cantidad']}</td><td>{money(r['total'])}</td>
+        </tr>
+        """
+        for i, r in enumerate(rows, 1)
+    ]) or "<tr><td colspan='11'>Sin consumos con el filtro seleccionado.</td></tr>"
+
+    admin_buttons = ""
+    if session.get("role") == "admin":
+        admin_buttons = f"""
+        <div class="admin-actions">
+          <a class="btn btn-orange" href="{url_for('cerrar_dia_manual')}">🔒 Cerrar día</a>
+          <a class="btn btn-blue" href="{url_for('abrir_dia_manual')}">🔓 Abrir día</a>
+        </div>
+        """
+
+    html = topbar("Dashboard", "Indicadores filtrados por día, mes o año") + admin_buttons
+    html += filtro_bar(url_for("dashboard"), fecha_inicio, fecha_fin, buscar)
+    html += f"""
+    <div class="kpi-grid">
+      <div class="card kpi-card"><div class="icon-circle ic-green">🍴</div><div><div class="label">Consumos filtrados</div><div class="num">{total_filtro['c']}</div><div class="sub">RANGO</div></div></div>
+      <div class="card kpi-card"><div class="icon-circle ic-blue">✅</div><div><div class="label">Entregados</div><div class="num">{entregados}</div><div class="sub">confirmados</div></div></div>
+      <div class="card kpi-card"><div class="icon-circle ic-purple">⏳</div><div><div class="label">Pendientes</div><div class="num">{pendientes}</div><div class="sub">por entregar</div></div></div>
+      <div class="card kpi-card"><div class="icon-circle ic-orange">S/</div><div><div class="label">Total filtrado</div><div class="num" style="color:#16a34a">{money(total_filtro['t'])}</div><div class="sub">trabajadores activos: {trabajadores}</div></div></div>
+    </div>
+
+    <div class="card">
+      <div class="table-head">
+        <h3>Consumos filtrados</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a class="btn btn-blue" href="{url_for('exportar_concesionaria', fecha_inicio=fecha_inicio, fecha_fin=fecha_fin, buscar=buscar)}">Archivo concesionaria</a>
+          <a class="btn btn-orange" href="{url_for('reporte_entrega', fecha_inicio=fecha_inicio, fecha_fin=fecha_fin, buscar=buscar)}">Reporte entrega/pago</a>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <tr><th>#</th><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Comedor</th><th>Fundo</th><th>Cant.</th><th>Total</th></tr>
+          {tabla}
+        </table>
+      </div>
+    </div>
+    """
+    return render_page(html, "dashboard")
+
+
+@app.route("/consumos", methods=["GET", "POST"])
+@login_required
+@roles_required("admin", "rrhh", "comedor")
+def consumos():
+    if request.method == "POST":
+        fecha = request.form.get("fecha") or hoy_iso()
+
+        if dia_cerrado(fecha):
+            flash("El día ya está cerrado. No se puede registrar consumos.", "error")
+            return redirect(url_for("consumos"))
+
+        bloqueado, msg = registro_bloqueado()
+        if bloqueado and session.get("role") != "admin":
+            flash(msg, "error")
+            return redirect(url_for("consumos"))
+
+        dni = clean_dni(request.form.get("dni"))
+        trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+        if not trabajador:
+            flash("DNI no encontrado o trabajador inactivo.", "error")
+            return redirect(url_for("consumos"))
+
+        es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
+
+        # REGLA FUERTE: 1 DNI = 1 consumo normal por día.
+        if not es_adicional:
+            duplicado = q_one("SELECT id,hora,tipo FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni))
+            if duplicado:
+                flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy a las {duplicado['hora']}. Solo el admin puede registrar adicional.", "error")
+                return redirect(url_for("consumos"))
+
+        tipo = request.form.get("tipo", "Almuerzo")
+        if tipo not in ["Almuerzo", "Dieta"]:
+            tipo = "Almuerzo"
+
+        comedor = request.form.get("comedor", "Comedor 01")
+        fundo = request.form.get("fundo", "Kawsay Allpa")
+        responsable = clean_text(request.form.get("responsable"))
+        cantidad = int(float(request.form.get("cantidad") or 1))
+        precio = float(request.form.get("precio_unitario") or 10)
+        total = cantidad * precio
+        obs = clean_text(request.form.get("observacion"))
+
+        try:
+            q_exec("""
+                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"]))
+        except Exception:
+            flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}.", "error")
+            return redirect(url_for("consumos"))
+
+        flash("Consumo registrado correctamente." + (" Marcado como adicional." if es_adicional else ""), "ok")
+        return redirect(url_for("consumos"))
+
+    fecha = request.args.get("fecha") or hoy_iso()
+    fecha_inicio = request.args.get("fecha_inicio") or fecha
+    fecha_fin = request.args.get("fecha_fin") or fecha_inicio
+    buscar = clean_text(request.args.get("buscar"))
+    cond, params = rango_sql(fecha_inicio, fecha_fin)
+    where = cond
+    final_params = list(params)
+    if buscar:
+        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR comedor LIKE ? OR responsable LIKE ? OR tipo LIKE ?)"
+        b = f"%{buscar}%"
+        final_params += [b, b, b, b, b, b, b]
+
+    rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
+    tabla = "".join([
+        f"""
         <tr>
           <td>{r['fecha']}</td>
           <td>{r['hora']}</td>
@@ -1338,10 +1541,16 @@ def rows_filtrados_desde_request(solo_entregados=False):
           <td>{money(r['precio_unitario'])}</td>
           <td>{money(r['total'])}</td>
           <td><span class="badge {'ok' if r['estado']=='ENTREGADO' else 'warn'}">{r['estado']}</span></td>
-          <td>{accion_quitar}</td>
+          <td>
+            <form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center">
+              <input type="hidden" name="id" value="{r['id']}">
+              <input name="clave" placeholder="Clave" style="width:85px;padding:8px">
+              <button class="btn-red" style="padding:8px 10px">Quitar</button>
+            </form>
+          </td>
         </tr>
-        """)
-    tabla = "".join(tabla_parts) or "<tr><td colspan='14'>Sin registros para este filtro.</td></tr>"
+        """ for r in rows
+    ]) or "<tr><td colspan='14'>Sin registros para este filtro.</td></tr>"
 
     disabled = "disabled" if dia_cerrado(fecha) else ""
     bloqueado, msg_bloq = registro_bloqueado()
@@ -1437,22 +1646,15 @@ def api_entregas_pedidos():
     dni = clean_dni(request.args.get("dni"))
     if not dni:
         return jsonify({"ok": True, "pedidos": [], "count": 0})
-
     rows = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni))
     pedidos = []
     for i, r in enumerate(rows, 1):
         pedidos.append({
-            "id": r["id"],
-            "n": i,
-            "hora": r["hora"],
-            "tipo": r["tipo"],
-            "cantidad": r["cantidad"],
-            "observacion": r["observacion"] or "-",
-            "estado": r["estado"],
-            "pendiente": r["estado"] == "PENDIENTE",
+            "id": r["id"], "n": i, "hora": r["hora"], "tipo": r["tipo"],
+            "cantidad": r["cantidad"], "observacion": r["observacion"] or "-",
+            "estado": r["estado"], "pendiente": r["estado"] == "PENDIENTE"
         })
     return jsonify({"ok": True, "pedidos": pedidos, "count": len(pedidos)})
-
 
 @app.route("/entregas", methods=["GET", "POST"])
 @login_required
@@ -1559,7 +1761,6 @@ def entregas():
     </script>
     """
     return render_page(html, "entregas")
-
 
 @app.route("/carga_masiva", methods=["GET", "POST"])
 @login_required
