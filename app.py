@@ -2023,9 +2023,20 @@ def consumos():
       try{{
         if(window.Html5Qrcode){{
           qrActivo = new Html5Qrcode('qr-reader-live');
+          const formatosQrBarra = (window.Html5QrcodeSupportedFormats) ? [
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.ITF,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.PDF_417
+          ] : undefined;
           await qrActivo.start(
             {{ facingMode: 'environment' }},
-            {{ fps: 12, qrbox: {{ width: 260, height: 260 }}, rememberLastUsedCamera: true }},
+            {{ fps: 12, qrbox: {{ width: 280, height: 180 }}, rememberLastUsedCamera: true, formatsToSupport: formatosQrBarra }},
             async (decodedText) => {{
               await procesarDniQR(decodedText);
               if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); }}
