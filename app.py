@@ -201,17 +201,6 @@ def init_db():
                 """)
                 for stmt in [
                     "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_plain TEXT DEFAULT ''",
-                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS empresa TEXT DEFAULT 'PRIZE'",
-                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS cargo TEXT DEFAULT ''",
-                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS area TEXT DEFAULT ''",
-                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS activo INTEGER DEFAULT 1",
-                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS creado TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS actualizado TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-                    "ALTER TABLE importaciones ADD COLUMN IF NOT EXISTS archivo TEXT DEFAULT ''",
-                    "ALTER TABLE importaciones ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0",
-                    "ALTER TABLE importaciones ADD COLUMN IF NOT EXISTS creados INTEGER DEFAULT 0",
-                    "ALTER TABLE importaciones ADD COLUMN IF NOT EXISTS errores INTEGER DEFAULT 0",
-                    "ALTER TABLE importaciones ADD COLUMN IF NOT EXISTS usuario TEXT DEFAULT ''",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS comedor TEXT DEFAULT 'Comedor 01'",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS fundo TEXT DEFAULT 'Kawsay Allpa'",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS responsable TEXT DEFAULT ''",
@@ -304,14 +293,6 @@ def init_db():
             user_cols = [x["name"] for x in conn.execute("PRAGMA table_info(usuarios)").fetchall()]
             if "password_plain" not in user_cols:
                 conn.execute("ALTER TABLE usuarios ADD COLUMN password_plain TEXT DEFAULT ''")
-            trab_cols = [x["name"] for x in conn.execute("PRAGMA table_info(trabajadores)").fetchall()]
-            for col, sqltype, default in [("empresa", "TEXT", "'PRIZE'"), ("cargo", "TEXT", "''"), ("area", "TEXT", "''"), ("activo", "INTEGER", "1"), ("creado", "TEXT", "CURRENT_TIMESTAMP"), ("actualizado", "TEXT", "CURRENT_TIMESTAMP")]:
-                if col not in trab_cols:
-                    conn.execute(f"ALTER TABLE trabajadores ADD COLUMN {col} {sqltype} DEFAULT {default}")
-            imp_cols = [x["name"] for x in conn.execute("PRAGMA table_info(importaciones)").fetchall()]
-            for col, sqltype, default in [("archivo", "TEXT", "''"), ("total", "INTEGER", "0"), ("creados", "INTEGER", "0"), ("errores", "INTEGER", "0"), ("usuario", "TEXT", "''")]:
-                if col not in imp_cols:
-                    conn.execute(f"ALTER TABLE importaciones ADD COLUMN {col} {sqltype} DEFAULT {default}")
             cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
             for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0")]:
                 if col not in cols:
@@ -512,45 +493,6 @@ def col_value(row, *names):
             if clean_text(val):
                 return val
     return ""
-
-
-def leer_excel_seguro(file_storage):
-    """Lee Excel de forma robusta para Render/local. Devuelve DataFrame con columnas normalizadas."""
-    filename = (getattr(file_storage, "filename", "") or "").lower()
-    data = file_storage.read()
-    if not data:
-        raise ValueError("El archivo está vacío")
-    bio = BytesIO(data)
-    if filename.endswith(".xlsx"):
-        df = pd.read_excel(bio, dtype=str, engine="openpyxl").fillna("")
-    else:
-        # .xls requiere xlrd instalado; si falla, avisamos claro en pantalla.
-        df = pd.read_excel(bio, dtype=str).fillna("")
-    df.columns = normalize_columns(df.columns)
-    return df
-
-def reemplazar_trabajadores_desde_registros(registros):
-    """Reemplaza la base de trabajadores en una sola transacción. Evita quedar a medias si Render/Postgres falla."""
-    rows = [(r["empresa"], r["dni"], r["nombre"], r["cargo"], r["area"]) for r in registros.values()]
-    if not rows:
-        return 0
-    with get_conn() as conn:
-        if USE_POSTGRES:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM trabajadores")
-                cur.executemany(
-                    "INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(%s,%s,%s,%s,%s,1)",
-                    rows
-                )
-                conn.commit()
-        else:
-            conn.execute("DELETE FROM trabajadores")
-            conn.executemany(
-                "INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)",
-                rows
-            )
-            conn.commit()
-    return len(rows)
 
 def dia_cerrado(fecha_iso=None):
     return q_one("SELECT * FROM cierres WHERE fecha=?", (fecha_iso or hoy_iso(),))
@@ -1389,7 +1331,8 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
 .eye-btn{padding:8px 10px;border-radius:10px;background:#0d73b8;box-shadow:none}
 @media(max-width:760px){.user-search{width:100%;max-width:none;margin-left:0}.users-scroll{max-height:65vh}.pass-cell{min-width:210px}.users-scroll table{min-width:850px}.worker-name-field{grid-column:1/-1!important;min-width:100%}}
 </style>
-<script src="https://unpkg.com/html5-qrcode" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -1493,6 +1436,168 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
   </footer>
 </div>
 {% endif %}
+<script>
+// ===== PRO TOTAL: DNI automático + cámara QR/BARRAS para CONSUMOS =====
+(function(){
+  let proTimer = null;
+  let proScanner = null;
+  let proStream = null;
+  let proBusy = false;
+
+  function dniClean(v){
+    const raw = String(v || '').trim();
+    const only = raw.replace(/\D/g,'');
+    if (only.length === 8) return only;
+    const labeled = raw.toUpperCase().match(/(?:DNI|DOC(?:UMENTO)?|DOCUMENT|NRO|NUMERO|NÚMERO)\D{0,20}(\d{8})(?!\d)/);
+    if (labeled) return labeled[1];
+    const eight = raw.match(/(^|\D)(\d{8})(?!\d)/);
+    if (eight) return eight[2];
+    if (only.length > 8) return only.slice(-8);
+    return only.slice(0,8);
+  }
+  function toast(msg, ok=true){
+    let d = document.createElement('div');
+    d.textContent = msg;
+    d.style.cssText = 'position:fixed;left:12px;right:12px;bottom:18px;z-index:999999;padding:13px 15px;border-radius:13px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.25);background:'+(ok?'#17a34a':'#b91c1c');
+    document.body.appendChild(d); setTimeout(()=>d.remove(), 1800);
+    try{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); }catch(e){}
+  }
+  function beep(){
+    try{
+      const C = window.AudioContext || window.webkitAudioContext;
+      const c = new C(); const o = c.createOscillator(); const g = c.createGain();
+      o.connect(g); g.connect(c.destination); o.frequency.value = 920; g.gain.value = .08;
+      o.start(); setTimeout(()=>{o.stop(); c.close();}, 130);
+    }catch(e){}
+  }
+  function setNombre(data, dni){
+    const nombre = document.getElementById('nombre_trabajador') || document.querySelector('[name="nombre"],#nombre');
+    const info = document.getElementById('info_trabajador_consumo');
+    if(data && (data.ok || data.success || data.nombre)){
+      if(nombre){ nombre.value = data.nombre || ''; nombre.title = data.nombre || ''; }
+      if(info){
+        info.style.display='block';
+        info.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(data.nombre||'-')+'</div><div><b>DNI</b><br>'+dni+'</div><div><b>Área</b><br>'+(data.area||'-')+'</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>';
+      }
+      beep(); return true;
+    } else {
+      if(nombre){ nombre.value = 'DNI no encontrado'; nombre.title = 'DNI no encontrado'; }
+      if(info){ info.style.display='block'; info.innerHTML='<span style="color:#991b1b">DNI no encontrado en Trabajadores: '+dni+'</span>'; }
+      return false;
+    }
+  }
+  async function buscarAutoDniConsumo(force=false){
+    const inp = document.getElementById('dni_consumo') || document.querySelector('input[name="dni"]');
+    if(!inp) return;
+    const dni = dniClean(inp.value);
+    inp.value = dni;
+    const nombre = document.getElementById('nombre_trabajador') || document.querySelector('[name="nombre"],#nombre');
+    if(dni.length < 8){ if(nombre) nombre.value=''; return; }
+    if(nombre) nombre.value = 'Validando DNI...';
+    try{
+      const r = await fetch('/api/trabajador/' + encodeURIComponent(dni) + '?_=' + Date.now(), {cache:'no-store', credentials:'same-origin'});
+      const data = await r.json();
+      const ok = setNombre(data, dni);
+      if(ok && document.getElementById('modo_lote')?.checked && typeof agregarDniLote === 'function'){
+        setTimeout(()=>agregarDniLote(dni, data.nombre || ''), 80);
+      }
+    }catch(e){ if(nombre) nombre.value='Error validando DNI'; toast('No se pudo consultar el DNI.', false); }
+  }
+  window.buscarAutoDniConsumo = buscarAutoDniConsumo;
+  window.dniInputHandler = function(){
+    const inp = document.getElementById('dni_consumo') || document.querySelector('input[name="dni"]');
+    if(!inp) return;
+    inp.value = dniClean(inp.value);
+    clearTimeout(proTimer);
+    proTimer = setTimeout(()=>buscarAutoDniConsumo(false), inp.value.length === 8 ? 20 : 120);
+  };
+  async function procesarLectura(texto){
+    if(proBusy) return;
+    const dni = dniClean(texto);
+    if(dni.length !== 8){ toast('No detecté un DNI de 8 dígitos.', false); return; }
+    proBusy = true;
+    const inp = document.getElementById('dni_consumo') || document.querySelector('input[name="dni"]');
+    if(inp) inp.value = dni;
+    await buscarAutoDniConsumo(true);
+    toast('DNI leído: ' + dni, true);
+    setTimeout(()=>{proBusy=false;}, 900);
+  }
+  window.abrirScannerQR = async function(){
+    let cont = document.getElementById('qr-reader');
+    if(!cont){
+      cont = document.createElement('div'); cont.id = 'qr-reader';
+      const form = document.getElementById('form_consumo') || document.body;
+      form.appendChild(cont);
+    }
+    if(location.protocol !== 'https:' && !['localhost','127.0.0.1'].includes(location.hostname)){
+      toast('La cámara requiere HTTPS. Usa el enlace de Render con https://', false);
+    }
+    cont.style.display='block';
+    cont.innerHTML = '<div style="grid-column:1/-1;padding:12px;border:1px solid #dce6f0;border-radius:14px;background:#f8fbff"><b>📷 Cámara QR / Barras activa</b><div id="qr-reader-live" style="width:100%;max-width:460px;margin-top:8px"></div><video id="qr-video-live" playsinline muted autoplay style="display:none;width:100%;max-width:460px;border-radius:12px;margin-top:8px;background:#000"></video><canvas id="qr-canvas-live" style="display:none"></canvas><button type="button" class="btn-red" style="margin-top:8px" onclick="cerrarScannerQR()">Cerrar cámara</button><br><small>Permite la cámara. En celular usa Chrome y HTTPS.</small></div>';
+    try{
+      if(window.Html5Qrcode){
+        const formats = window.Html5QrcodeSupportedFormats ? [
+          Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39, Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8, Html5QrcodeSupportedFormats.ITF,
+          Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.PDF_417
+        ].filter(Boolean) : undefined;
+        proScanner = new Html5Qrcode('qr-reader-live', formats ? {formatsToSupport:formats, verbose:false} : undefined);
+        await proScanner.start({facingMode:{ideal:'environment'}}, {fps:15, qrbox:{width:280,height:190}, rememberLastUsedCamera:true}, async txt=>{
+          await procesarLectura(txt);
+          if(!document.getElementById('modo_lote')?.checked) cerrarScannerQR();
+        }, ()=>{});
+        toast('Cámara activada.', true); return;
+      }
+    }catch(e){ console.warn('html5-qrcode no abrió, usando respaldo', e); }
+    await scannerNativo();
+  };
+  async function scannerNativo(){
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Navegador sin cámara');
+    const video = document.getElementById('qr-video-live'); const canvas = document.getElementById('qr-canvas-live');
+    const live = document.getElementById('qr-reader-live'); if(live) live.innerHTML='<b>Respaldo con cámara nativa...</b>';
+    proStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
+    video.srcObject = proStream; video.style.display='block'; await video.play();
+    let detector = null;
+    if('BarcodeDetector' in window){ try{ detector = new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','upc_a','upc_e','pdf417']}); }catch(e){} }
+    const loop = async()=>{
+      if(!proStream) return;
+      try{
+        if(detector){ const codes = await detector.detect(video); if(codes && codes.length){ await procesarLectura(codes[0].rawValue||''); if(!document.getElementById('modo_lote')?.checked){cerrarScannerQR(); return;} } }
+        if(window.jsQR && video.videoWidth){
+          canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+          const ctx=canvas.getContext('2d',{willReadFrequently:true}); ctx.drawImage(video,0,0,canvas.width,canvas.height);
+          const img=ctx.getImageData(0,0,canvas.width,canvas.height); const code=jsQR(img.data,img.width,img.height);
+          if(code && code.data){ await procesarLectura(code.data); if(!document.getElementById('modo_lote')?.checked){cerrarScannerQR(); return;} }
+        }
+      }catch(e){}
+      requestAnimationFrame(loop);
+    };
+    toast('Cámara activada.', true); requestAnimationFrame(loop);
+  }
+  window.cerrarScannerQR = function(){
+    try{ if(proScanner && proScanner.stop) proScanner.stop().catch(()=>{}).finally(()=>{try{proScanner.clear();}catch(e){}}); }catch(e){}
+    try{ if(proStream){ proStream.getTracks().forEach(t=>t.stop()); } }catch(e){}
+    proScanner=null; proStream=null;
+    const cont=document.getElementById('qr-reader'); if(cont){cont.style.display='none'; cont.innerHTML='';}
+  };
+  document.addEventListener('DOMContentLoaded', function(){
+    const inp = document.getElementById('dni_consumo');
+    if(inp){
+      inp.setAttribute('oninput','dniInputHandler()');
+      inp.setAttribute('onkeyup','dniInputHandler()');
+      inp.addEventListener('input', window.dniInputHandler, true);
+      inp.addEventListener('paste', ()=>setTimeout(window.dniInputHandler, 30), true);
+      inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){e.preventDefault(); buscarAutoDniConsumo(true);} }, true);
+      setTimeout(()=>inp.focus(),250);
+    }
+    const btn = document.getElementById('btn_qr');
+    if(btn) btn.onclick = window.abrirScannerQR;
+  });
+})();
+</script>
+
 </body>
 </html>
 """
@@ -1810,7 +1915,7 @@ def consumos():
                     creados += 1
                 except Exception as e:
                     errores.append(f"{dni}: no se pudo registrar")
-            msg = f"Registro masivo terminado: {creados} consumo(s) registrado(s)."
+            msg = f"REGISTRO DE CONSUMO terminado: {creados} consumo(s) registrado(s) para la fecha {fecha_peru_txt(fecha)}."
             if errores:
                 msg += " Alertas: " + " | ".join(errores[:12])
                 if len(errores) > 12:
@@ -1840,7 +1945,7 @@ def consumos():
             flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}.", "error")
             return redirect(url_for("consumos"))
 
-        flash("Consumo registrado correctamente." + (" Marcado como adicional." if es_adicional else ""), "ok")
+        flash("REGISTRO DE CONSUMO realizado correctamente." + (" Marcado como adicional." if es_adicional else ""), "ok")
         return redirect(url_for("consumos"))
 
     fecha = request.args.get("fecha") or hoy_iso()
@@ -1929,10 +2034,10 @@ def consumos():
         <div id="lote_panel" style="display:none;grid-column:1/-1;border:1px solid #dce6f0;border-radius:12px;padding:10px;background:#f8fbff">
           <b>DNIs guardados para registro masivo:</b> <span id="lote_count" class="badge ok">0</span>
           <div id="lote_lista" style="margin-top:8px;font-size:13px;color:#25364a;max-height:130px;overflow:auto"></div>
-          <p class="muted small" style="margin:8px 0 0">Digite o escanee un DNI de 8 dígitos. Si existe en trabajadores, se guarda automáticamente en esta lista.</p>
+          <p class="muted small" style="margin:8px 0 0">Digite o escanee un DNI de 8 dígitos. En modo masivo NO se registra todavía: solo se guarda en esta lista temporal hasta presionar REGISTRO DE CONSUMO.</p>
         </div>
         <textarea id="dni_lote" name="dni_lote" placeholder="DNIs validados para lote" style="display:none;grid-column:1/-1;min-height:90px"></textarea>
-        <button id="btn_submit_consumo" {disabled}>Registrar consumo</button>
+        <button id="btn_submit_consumo" {disabled}>REGISTRO DE CONSUMO</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
       <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. Al digitar el DNI aparecerá automáticamente el nombre del trabajador.</p>
@@ -1942,7 +2047,6 @@ def consumos():
     let ultimoDniValidado = '';
     let qrActivo = null;
     let scannerBusy = false;
-    let loteAutoSaveLock = false;
 
     function soloDni(v){{
       const raw = String(v || '').trim();
@@ -1959,17 +2063,28 @@ def consumos():
     function getLoteArray(){{
       const box = document.getElementById('dni_lote');
       if(!box) return [];
-      return (box.value || '').split(/\s+/).map(soloDni).filter(x => x.length === 8);
+      return (box.value || '').split(/[\s,;|]+/).map(soloDni).filter(x => x.length === 8);
     }}
     function setLoteArray(arr){{
       const limpio = [];
-      arr.forEach(d => {{ if(d && !limpio.includes(d)) limpio.push(d); }});
+      arr.forEach(d => {{ d = soloDni(d); if(d && d.length === 8 && !limpio.includes(d)) limpio.push(d); }});
       const box = document.getElementById('dni_lote');
       const lista = document.getElementById('lote_lista');
       const count = document.getElementById('lote_count');
       if(box) box.value = limpio.join('\n');
       if(count) count.textContent = limpio.length;
-      if(lista) lista.innerHTML = limpio.length ? limpio.map(d => `<span class="badge ok" style="margin:3px;display:inline-block">${{d}}</span>`).join('') : '<span class="muted">Aún no hay DNIs guardados.</span>';
+      if(lista){{
+        lista.innerHTML = limpio.length
+          ? limpio.map((d, i) => `<span class="badge ok" style="margin:3px;display:inline-flex;gap:6px;align-items:center">${{i+1}}. ${{d}} <button type="button" onclick="quitarDniLote('${{d}}')" style="min-height:0;width:auto;padding:2px 7px;border-radius:999px;background:#ef4444;box-shadow:none">×</button></span>`).join('')
+          : '<span class="muted">Aún no hay DNIs guardados. Digite o escanee para acumular.</span>';
+      }}
+      try{{ localStorage.setItem('lote_consumos_' + new Date().toISOString().slice(0,10), limpio.join('\n')); }}catch(e){{}}
+    }}
+    function quitarDniLote(dni){{
+      const arr = getLoteArray().filter(x => x !== soloDni(dni));
+      setLoteArray(arr);
+      avisoMovil('DNI quitado del lote: ' + dni, false);
+      setTimeout(()=>document.getElementById('dni_consumo')?.focus(), 100);
     }}
     function beepOk(){{
       try{{
@@ -2044,21 +2159,23 @@ def consumos():
       if(dni.length !== 8) return;
       const arr = getLoteArray();
       if(arr.includes(dni)){{
-        avisoMovil('DNI ya estaba en lote: ' + dni, false);
+        avisoMovil('DNI ya estaba guardado en el lote: ' + dni, false);
       }}else{{
         arr.push(dni);
         setLoteArray(arr);
         beepOk();
-        avisoMovil('Guardado en lote: ' + dni + (nombre ? ' - ' + nombre : ''), true);
+        avisoMovil('DNI guardado en lote temporal: ' + dni + (nombre ? ' - ' + nombre : ''), true);
       }}
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
+      const info = document.getElementById('info_trabajador_consumo');
       if(inp) inp.value = '';
       if(out) out.value = '';
+      if(info){{ info.style.display='block'; info.innerHTML='<b>Lote activo:</b> ' + getLoteArray().length + ' DNI(s) guardados. Presiona <b>REGISTRO DE CONSUMO</b> para registrar todo.'; }}
       ultimoDniValidado = '';
-      setTimeout(()=>inp?.focus(), 250);
+      setTimeout(()=>inp?.focus(), 120);
     }}
-    function toggleLote(silencioso=false){{
+    function toggleLote(){{
       const on = document.getElementById('modo_lote')?.checked;
       const box = document.getElementById('dni_lote');
       const panel = document.getElementById('lote_panel');
@@ -2066,12 +2183,10 @@ def consumos():
       if(box) box.style.display = on ? 'block' : 'none';
       if(panel) panel.style.display = on ? 'block' : 'none';
       if(dni) dni.required = !on;
-      const nombre = document.getElementById('nombre_trabajador');
-      if(on && nombre) nombre.value = '';
       setLoteArray(getLoteArray());
       const btn = document.getElementById('btn_submit_consumo');
-      if(btn) btn.textContent = on ? 'REGISTRO MASIVO' : 'Registrar consumo';
-      if(on && !silencioso) avisoMovil('Registro masivo activado. Digite o escanee DNIs.', true);
+      if(btn) btn.textContent = 'REGISTRO DE CONSUMO';
+      if(on) avisoMovil('Registro masivo activado. Los DNI se guardarán en lote temporal hasta presionar REGISTRO DE CONSUMO.', true);
     }}
     async function procesarDniQR(texto){{
       if(scannerBusy) return;
@@ -2204,6 +2319,7 @@ def consumos():
         const arr = getLoteArray();
         if(arr.length === 0){{ e.preventDefault(); avisoMovil('No hay DNI válidos guardados para el registro masivo.', false); return false; }}
         document.getElementById('dni_lote').value = arr.join('\n');
+        if(!confirm('Se registrarán ' + arr.length + ' consumo(s) para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
       }}
       return true;
     }}
@@ -2219,7 +2335,12 @@ def consumos():
       }}
       const form = document.getElementById('form_consumo');
       if(form) form.addEventListener('submit', validarAntesEnviar);
-      toggleLote(true);
+      try{{
+        const key = 'lote_consumos_' + new Date().toISOString().slice(0,10);
+        const guardado = localStorage.getItem(key);
+        if(guardado && document.getElementById('dni_lote')) document.getElementById('dni_lote').value = guardado;
+      }}catch(e){{}}
+      toggleLote();
       setLoteArray(getLoteArray());
     }});
     </script>
@@ -2549,7 +2670,11 @@ def trabajadores():
                 return redirect(url_for("trabajadores"))
 
             # Lectura robusta. En Render se recomienda .xlsx con openpyxl.
-            df = leer_excel_seguro(f)
+            if f.filename.lower().endswith(".xlsx"):
+                df = pd.read_excel(f, dtype=str, engine="openpyxl").fillna("")
+            else:
+                df = pd.read_excel(f, dtype=str).fillna("")
+            df.columns = normalize_columns(df.columns)
 
             # Acepta columnas comunes: DNI, DOCUMENTO, APELLIDOS Y NOMBRES, NOMBRE COMPLETO, TRABAJADOR, etc.
             registros = {}
@@ -2574,7 +2699,12 @@ def trabajadores():
 
             # REEMPLAZO TOTAL: la base de trabajadores queda igual al Excel importado.
             # No borra consumos históricos; solo reemplaza la tabla de trabajadores.
-            creados = reemplazar_trabajadores_desde_registros(registros)
+            q_exec("DELETE FROM trabajadores", ())
+            creados = 0
+            for r in registros.values():
+                q_exec("INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)",
+                       (r["empresa"], r["dni"], r["nombre"], r["cargo"], r["area"]))
+                creados += 1
 
             q_exec("INSERT INTO importaciones(archivo,total,creados,errores,usuario) VALUES(?,?,?,?,?)",
                    (f.filename, len(df), creados, omitidos, session.get("user", "")))
@@ -2604,7 +2734,7 @@ def trabajadores():
     html = topbar("Trabajadores", "Base de trabajadores activos para validar DNI") + f"""
     <div class="card">
       <h3 style="margin-top:0">Registro manual</h3>
-      <form method="post" class="form-grid" id="form_trabajador_manual">
+      <form method="post" class="form-grid" id="form_consumo">
         <input type="hidden" name="manual" value="1">
         <input name="empresa" value="PRIZE" placeholder="Empresa">
         <input name="dni" placeholder="DNI" required>
