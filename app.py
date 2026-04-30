@@ -1778,8 +1778,8 @@ def consumos():
       <h3 style="margin-top:0">Registrar consumo</h3>
       <form method="post" class="form-grid">
         <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige una fecha para consultar. Solo hoy permite registrar." max="{hoy_iso()}">
-        <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" oninput="buscarTrabajadorConsumo()" {disabled}>
-        <button type="button" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Escanear QR</button>
+        <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" maxlength="8" autocomplete="off" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
+        <button type="button" id="btn_qr" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Escanear QR</button>
         <input id="nombre_trabajador" class="worker-name-field" placeholder="Nombre completo del trabajador" readonly title="Nombre completo del trabajador" {disabled}>
         <select name="comedor" {disabled}>
           {''.join([f'<option>{c}</option>' for c in opciones_comedor()])}
@@ -1797,54 +1797,184 @@ def consumos():
         <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
         <label style="font-weight:900"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" onchange="toggleLote()"> Registro masivo / lote</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
-        <textarea id="dni_lote" name="dni_lote" placeholder="Pegue aquí DNI por línea, separados por coma, espacio o lector QR múltiple. Se validará cada DNI registrado." style="display:none;grid-column:1/-1;min-height:110px"></textarea>
+        <div id="lote_panel" style="display:none;grid-column:1/-1;border:1px solid #dce6f0;border-radius:12px;padding:10px;background:#f8fbff">
+          <b>DNIs guardados para registro masivo:</b> <span id="lote_count" class="badge ok">0</span>
+          <div id="lote_lista" style="margin-top:8px;font-size:13px;color:#25364a;max-height:130px;overflow:auto"></div>
+          <p class="muted small" style="margin:8px 0 0">Digite o escanee un DNI de 8 dígitos. Si existe en trabajadores, se guarda automáticamente en esta lista.</p>
+        </div>
+        <textarea id="dni_lote" name="dni_lote" placeholder="DNIs validados para lote" style="display:none;grid-column:1/-1;min-height:90px"></textarea>
         <button {disabled}>Registrar consumo</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
       <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. Al digitar el DNI aparecerá automáticamente el nombre del trabajador.</p>
     </div>
     <script>
-    async function buscarTrabajadorConsumo(){{
-      const dni = (document.getElementById('dni_consumo')?.value || '').replace(/\D/g,'');
-      const out = document.getElementById('nombre_trabajador');
-      if(!out) return;
-      if(dni.length < 8){{ out.value=''; return; }}
+    let dniTimer = null;
+    let ultimoDniValidado = '';
+    let qrActivo = null;
+
+    function soloDni(v){{ return (v || '').replace(/\D/g,'').slice(0,8); }}
+    function getLoteArray(){{
+      const box = document.getElementById('dni_lote');
+      if(!box) return [];
+      return (box.value || '').split(/\s+/).map(soloDni).filter(x => x.length === 8);
+    }}
+    function setLoteArray(arr){{
+      const limpio = [];
+      arr.forEach(d => {{ if(d && !limpio.includes(d)) limpio.push(d); }});
+      const box = document.getElementById('dni_lote');
+      const lista = document.getElementById('lote_lista');
+      const count = document.getElementById('lote_count');
+      if(box) box.value = limpio.join('\n');
+      if(count) count.textContent = limpio.length;
+      if(lista) lista.innerHTML = limpio.length ? limpio.map(d => `<span class="badge ok" style="margin:3px;display:inline-block">${{d}}</span>`).join('') : '<span class="muted">Aún no hay DNIs guardados.</span>';
+    }}
+    function beepOk(){{
       try{{
-        const r = await fetch('/api/trabajador/' + encodeURIComponent(dni));
-        const d = await r.json();
-        out.value = d.ok ? d.nombre : 'DNI no encontrado';
-        out.title = d.ok ? d.nombre : '';
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = 880; gain.gain.value = 0.06;
+        osc.start(); setTimeout(()=>{{osc.stop(); ctx.close();}}, 120);
+      }}catch(e){{}}
+      if(navigator.vibrate) navigator.vibrate(80);
+    }}
+    function avisoMovil(msg, ok=true){{
+      const div = document.createElement('div');
+      div.textContent = msg;
+      div.style.position='fixed'; div.style.left='12px'; div.style.right='12px'; div.style.bottom='18px';
+      div.style.zIndex='99999'; div.style.padding='12px 14px'; div.style.borderRadius='12px';
+      div.style.fontWeight='900'; div.style.color='white'; div.style.textAlign='center';
+      div.style.background = ok ? '#17a34a' : '#b91c1c';
+      document.body.appendChild(div); setTimeout(()=>div.remove(), 1700);
+    }}
+    async function validarDni(dni){{
+      const r = await fetch('/api/trabajador/' + encodeURIComponent(dni), {{cache:'no-store'}});
+      return await r.json();
+    }}
+    async function buscarTrabajadorConsumo(force=false){{
+      const inp = document.getElementById('dni_consumo');
+      const out = document.getElementById('nombre_trabajador');
+      if(!inp || !out) return;
+      const dni = soloDni(inp.value);
+      if(inp.value !== dni) inp.value = dni;
+      if(dni.length < 8){{ out.value=''; ultimoDniValidado=''; return; }}
+      if(!force && ultimoDniValidado === dni) return;
+      ultimoDniValidado = dni;
+      out.value = 'Validando DNI...';
+      try{{
+        const d = await validarDni(dni);
+        if(d.ok){{
+          out.value = d.nombre;
+          out.title = d.nombre;
+          if(document.getElementById('modo_lote')?.checked){{
+            agregarDniLote(dni, d.nombre);
+          }}
+        }}else{{
+          out.value = 'DNI no encontrado';
+          out.title = 'DNI no encontrado';
+          if(document.getElementById('modo_lote')?.checked) avisoMovil('DNI no encontrado: ' + dni, false);
+        }}
       }}catch(e){{ out.value='No se pudo validar DNI'; }}
+    }}
+    function dniInputHandler(){{
+      clearTimeout(dniTimer);
+      dniTimer = setTimeout(()=>buscarTrabajadorConsumo(false), 120);
+    }}
+    function agregarDniLote(dni, nombre){{
+      dni = soloDni(dni);
+      if(dni.length !== 8) return;
+      const arr = getLoteArray();
+      if(arr.includes(dni)){{
+        avisoMovil('DNI ya estaba en lote: ' + dni, false);
+      }}else{{
+        arr.push(dni);
+        setLoteArray(arr);
+        beepOk();
+        avisoMovil('Guardado en lote: ' + dni + (nombre ? ' - ' + nombre : ''), true);
+      }}
+      const inp = document.getElementById('dni_consumo');
+      const out = document.getElementById('nombre_trabajador');
+      if(inp) inp.value = '';
+      if(out) out.value = '';
+      ultimoDniValidado = '';
+      setTimeout(()=>inp?.focus(), 250);
     }}
     function toggleLote(){{
       const on = document.getElementById('modo_lote')?.checked;
       const box = document.getElementById('dni_lote');
+      const panel = document.getElementById('lote_panel');
       const dni = document.getElementById('dni_consumo');
       if(box) box.style.display = on ? 'block' : 'none';
+      if(panel) panel.style.display = on ? 'block' : 'none';
       if(dni) dni.required = !on;
+      setLoteArray(getLoteArray());
+      if(on) avisoMovil('Registro masivo activado. Digite o escanee DNIs.', true);
+    }}
+    async function cargarLibreriaQR(){{
+      if(window.Html5Qrcode) return true;
+      const srcs = [
+        'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
+        'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'
+      ];
+      for(const src of srcs){{
+        try{{
+          await new Promise((resolve,reject)=>{{
+            const s=document.createElement('script'); s.src=src; s.async=true; s.onload=resolve; s.onerror=reject; document.head.appendChild(s);
+            setTimeout(()=>reject(new Error('timeout')), 6000);
+          }});
+          if(window.Html5Qrcode) return true;
+        }}catch(e){{}}
+      }}
+      return false;
+    }}
+    async function procesarDniQR(decoded){{
+      const dni = soloDni(decoded);
+      if(dni.length !== 8){{ avisoMovil('QR no contiene DNI válido', false); return; }}
+      if(document.getElementById('modo_lote')?.checked){{
+        try{{
+          const d = await validarDni(dni);
+          if(d.ok) agregarDniLote(dni, d.nombre);
+          else avisoMovil('DNI no encontrado: ' + dni, false);
+        }}catch(e){{ avisoMovil('No se pudo validar DNI', false); }}
+      }}else{{
+        const inp = document.getElementById('dni_consumo');
+        if(inp) inp.value = dni;
+        await buscarTrabajadorConsumo(true);
+        beepOk();
+      }}
     }}
     async function abrirScannerQR(){{
       const cont = document.getElementById('qr-reader');
       if(!cont) return;
       cont.style.display='block';
-      if(!window.Html5Qrcode){{ alert('No se cargó el lector QR. Verifica internet o usa digitación.'); return; }}
+      cont.innerHTML='<div style="padding:10px;border:1px solid #dce6f0;border-radius:10px">Abriendo cámara...</div>';
+      const okLib = await cargarLibreriaQR();
+      if(!okLib){{ alert('No se cargó el lector QR. Verifica internet o usa digitación.'); cont.style.display='none'; return; }}
       try{{
-        const qr = new Html5Qrcode('qr-reader');
-        await qr.start({{ facingMode: 'environment' }}, {{ fps: 10, qrbox: 240 }}, decoded => {{
-          const dni = (decoded || '').replace(/\D/g,'').slice(0,8);
-          if(document.getElementById('modo_lote')?.checked){{
-            const box = document.getElementById('dni_lote');
-            box.value += (box.value.trim() ? '\n' : '') + dni;
-          }} else {{
-            document.getElementById('dni_consumo').value = dni;
-            buscarTrabajadorConsumo();
+        if(qrActivo){{ try{{ await qrActivo.stop(); }}catch(e){{}} qrActivo=null; }}
+        qrActivo = new Html5Qrcode('qr-reader');
+        const config = {{ fps: 10, qrbox: {{width: 240, height: 240}}, rememberLastUsedCamera: true }};
+        await qrActivo.start({{ facingMode: 'environment' }}, config, async decoded => {{
+          await procesarDniQR(decoded);
+          if(!document.getElementById('modo_lote')?.checked){{
+            try{{ await qrActivo.stop(); }}catch(e){{}}
+            cont.style.display='none'; qrActivo=null;
           }}
-          qr.stop(); cont.style.display='none';
         }});
-      }}catch(e){{ alert('No se pudo abrir cámara QR. Revisa permisos del celular.'); }}
+      }}catch(e){{
+        cont.style.display='none';
+        alert('No se pudo abrir cámara QR. Da permiso de cámara en el navegador y verifica que estés usando HTTPS.');
+      }}
     }}
+    document.addEventListener('DOMContentLoaded', ()=>{{
+      const inp = document.getElementById('dni_consumo');
+      if(inp){{ inp.addEventListener('paste', ()=>setTimeout(dniInputHandler, 50)); }}
+      setLoteArray(getLoteArray());
+    }});
     </script>
-    <script src="https://unpkg.com/html5-qrcode" defer></script>
     <div id="qr-reader" style="display:none;width:320px;max-width:100%;margin:10px 0"></div>
 
     <br>
