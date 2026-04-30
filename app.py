@@ -1331,7 +1331,8 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
 .eye-btn{padding:8px 10px;border-radius:10px;background:#0d73b8;box-shadow:none}
 @media(max-width:760px){.user-search{width:100%;max-width:none;margin-left:0}.users-scroll{max-height:65vh}.pass-cell{min-width:210px}.users-scroll table{min-width:850px}.worker-name-field{grid-column:1/-1!important;min-width:100%}}
 </style>
-<script src="https://unpkg.com/html5-qrcode" defer></script>
+<script src="https://unpkg.com/html5-qrcode" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -1677,6 +1678,16 @@ def api_trabajador(dni):
 def api_buscar_dni(dni):
     return api_trabajador(dni)
 
+@app.route("/buscar_trabajador/<dni>")
+@login_required
+def buscar_trabajador_compat(dni):
+    return api_trabajador(dni)
+
+@app.route("/api/trabajador")
+@login_required
+def api_trabajador_query():
+    return api_trabajador(request.args.get("dni", ""))
+
 @app.route("/consumos", methods=["GET", "POST"])
 @login_required
 @roles_required("admin", "rrhh", "comedor")
@@ -1870,14 +1881,14 @@ def consumos():
     let dniTimer = null;
     let ultimoDniValidado = '';
     let qrActivo = null;
+    let scannerBusy = false;
 
     function soloDni(v){{
       const raw = String(v || '').trim();
       if(!raw) return '';
       const only = raw.replace(/\D/g,'');
       if(only.length === 8) return only;
-      if(only.length > 0 && only.length < 8) return only.slice(0,8);
-      const labeled = raw.toUpperCase().match(/(?:DNI|DOC(?:UMENTO)?|NRO|NUM(?:ERO)?)\D{{0,12}}(\d{{8}})(?!\d)/);
+      const labeled = raw.toUpperCase().match(/(?:DNI|DOC(?:UMENTO)?|NRO|NÚMERO|NUMERO|DOCUMENT)\D{{0,16}}(\d{{8}})(?!\d)/);
       if(labeled) return labeled[1];
       const standalone = raw.match(/(^|\D)(\d{{8}})(?!\d)/);
       if(standalone) return standalone[2];
@@ -1906,10 +1917,10 @@ def consumos():
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = 880; gain.gain.value = 0.06;
-        osc.start(); setTimeout(()=>{{osc.stop(); ctx.close();}}, 120);
+        osc.frequency.value = 880; gain.gain.value = 0.07;
+        osc.start(); setTimeout(()=>{{osc.stop(); ctx.close();}}, 140);
       }}catch(e){{}}
-      if(navigator.vibrate) navigator.vibrate(80);
+      if(navigator.vibrate) navigator.vibrate(90);
     }}
     function avisoMovil(msg, ok=true){{
       const div = document.createElement('div');
@@ -1918,9 +1929,11 @@ def consumos():
       div.style.zIndex='99999'; div.style.padding='12px 14px'; div.style.borderRadius='12px';
       div.style.fontWeight='900'; div.style.color='white'; div.style.textAlign='center';
       div.style.background = ok ? '#17a34a' : '#b91c1c';
-      document.body.appendChild(div); setTimeout(()=>div.remove(), 1700);
+      document.body.appendChild(div); setTimeout(()=>div.remove(), 1900);
     }}
     async function validarDni(dni){{
+      dni = soloDni(dni);
+      if(dni.length !== 8) return {{ok:false, msg:'DNI incompleto'}};
       const r = await fetch('/api/trabajador/' + encodeURIComponent(dni), {{cache:'no-store'}});
       return await r.json();
     }}
@@ -1937,24 +1950,25 @@ def consumos():
       try{{
         const d = await validarDni(dni);
         if(d.ok){{
-          out.value = d.nombre;
-          out.title = d.nombre;
-          // MODO MASIVO: apenas el DNI llega a 8 dígitos y existe en la base, se guarda en lote.
+          out.value = d.nombre || '';
+          out.title = d.nombre || '';
           if(document.getElementById('modo_lote')?.checked){{
             setTimeout(()=>agregarDniLote(dni, d.nombre), 80);
+          }}else{{
+            beepOk();
           }}
         }}else{{
           out.value = 'DNI no encontrado';
           out.title = 'DNI no encontrado';
           if(document.getElementById('modo_lote')?.checked) avisoMovil('DNI no encontrado: ' + dni, false);
         }}
-      }}catch(e){{ out.value='No se pudo validar DNI'; }}
+      }}catch(e){{ out.value='No se pudo validar DNI'; avisoMovil('Error validando DNI.', false); }}
     }}
     function dniInputHandler(){{
       const inp = document.getElementById('dni_consumo');
       if(inp) inp.value = soloDni(inp.value);
       clearTimeout(dniTimer);
-      const espera = (inp && inp.value.length === 8) ? 40 : 120;
+      const espera = (inp && inp.value.length === 8) ? 30 : 130;
       dniTimer = setTimeout(()=>buscarTrabajadorConsumo(false), espera);
     }}
     function agregarDniLote(dni, nombre){{
@@ -1985,45 +1999,52 @@ def consumos():
       if(panel) panel.style.display = on ? 'block' : 'none';
       if(dni) dni.required = !on;
       setLoteArray(getLoteArray());
-      if(on) avisoMovil('Registro masivo activado. Digite o escanee DNIs.', true);
       const btn = document.getElementById('btn_submit_consumo');
       if(btn) btn.textContent = on ? 'REGISTRO MASIVO' : 'Registrar consumo';
+      if(on) avisoMovil('Registro masivo activado. Digite o escanee DNIs.', true);
     }}
     async function procesarDniQR(texto){{
+      if(scannerBusy) return;
       const dni = soloDni(texto);
-      if(dni.length !== 8){{ avisoMovil('QR/DNI inválido: no contiene 8 dígitos.', false); return; }}
+      if(dni.length !== 8){{ avisoMovil('QR/barras inválido: no contiene DNI de 8 dígitos.', false); return; }}
+      scannerBusy = true;
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
       if(inp) inp.value = dni;
       try{{
         const d = await validarDni(dni);
         if(d.ok){{
-          if(out) out.value = d.nombre;
+          if(out) out.value = d.nombre || '';
+          ultimoDniValidado = dni;
           if(document.getElementById('modo_lote')?.checked){{ agregarDniLote(dni, d.nombre); }}
-          else {{ beepOk(); avisoMovil('DNI reconocido: ' + d.nombre, true); }}
+          else {{ beepOk(); avisoMovil('DNI reconocido: ' + (d.nombre || dni), true); }}
         }}else{{
           if(out) out.value = 'DNI no encontrado';
           avisoMovil('DNI no encontrado: ' + dni, false);
         }}
       }}catch(e){{ avisoMovil('No se pudo validar el DNI.', false); }}
+      setTimeout(()=>{{ scannerBusy=false; }}, 900);
     }}
     async function abrirScannerQR(){{
       const cont = document.getElementById('qr-reader');
       if(!cont) return;
+      if(location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'){{
+        avisoMovil('La cámara necesita HTTPS. Abre el enlace de Render con https://', false);
+      }}
       cont.style.display='block';
       cont.innerHTML = `<div style="padding:10px;border:1px solid #dce6f0;border-radius:12px;background:#f8fbff">
-        <b>Escáner QR / barras activo</b><br>
-        <div id="qr-reader-live" style="width:100%;max-width:420px;margin-top:8px"></div>
-        <video id="qr-video-live" playsinline muted style="display:none;width:100%;max-width:420px;border-radius:12px;margin-top:8px;background:#000"></video>
+        <b>Escáner con cámara activo</b><br>
+        <div id="qr-reader-live" style="width:100%;max-width:430px;margin-top:8px"></div>
+        <video id="qr-video-live" playsinline muted autoplay style="display:none;width:100%;max-width:430px;border-radius:12px;margin-top:8px;background:#000"></video>
+        <canvas id="qr-canvas-live" style="display:none"></canvas>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <button type="button" class="btn-red" onclick="cerrarScannerQR()">Cerrar cámara</button>
         </div>
-        <small class="muted">En celular debe abrirse con HTTPS de Render. Permite la cámara y apunta al QR o código de barras.</small>
+        <small class="muted">Permite la cámara. En celular usa Chrome y el enlace HTTPS de Render.</small>
       </div>`;
       try{{
         if(window.Html5Qrcode){{
-          qrActivo = new Html5Qrcode('qr-reader-live');
-          const formatosQrBarra = (window.Html5QrcodeSupportedFormats) ? [
+          const formatos = window.Html5QrcodeSupportedFormats ? [
             Html5QrcodeSupportedFormats.QR_CODE,
             Html5QrcodeSupportedFormats.CODE_128,
             Html5QrcodeSupportedFormats.CODE_39,
@@ -2033,46 +2054,56 @@ def consumos():
             Html5QrcodeSupportedFormats.UPC_A,
             Html5QrcodeSupportedFormats.UPC_E,
             Html5QrcodeSupportedFormats.PDF_417
-          ] : undefined;
+          ].filter(Boolean) : undefined;
+          qrActivo = new Html5Qrcode('qr-reader-live', formatos ? {{ formatsToSupport: formatos, verbose: false }} : undefined);
           await qrActivo.start(
-            {{ facingMode: 'environment' }},
-            {{ fps: 12, qrbox: {{ width: 280, height: 180 }}, rememberLastUsedCamera: true, formatsToSupport: formatosQrBarra }},
-            async (decodedText) => {{
-              await procesarDniQR(decodedText);
-              if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); }}
-            }}
+            {{ facingMode: {{ ideal: 'environment' }} }},
+            {{ fps: 15, qrbox: {{ width: 280, height: 180 }}, rememberLastUsedCamera: true }},
+            async (decodedText) => {{ await procesarDniQR(decodedText); if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); }} }},
+            () => {{}}
           );
-          avisoMovil('Cámara activada. Escanea QR.', true);
+          avisoMovil('Cámara activada. Escanea QR o barras.', true);
           return;
         }}
-        await iniciarScannerNativo();
-      }}catch(e){{
-        try{{ await iniciarScannerNativo(); }}catch(e2){{
-          alert('No se pudo abrir la cámara. Activa permisos, usa HTTPS en Render y Chrome/Edge. Detalle: ' + (e2 && e2.message ? e2.message : e2));
-        }}
-      }}
+      }}catch(e){{ console.warn('Html5Qrcode falló, usando respaldo:', e); }}
+      try{{ await iniciarScannerNativo(); }}
+      catch(e2){{ alert('No se pudo abrir la cámara. Usa HTTPS de Render, acepta permisos y prueba Chrome/Edge. Detalle: ' + (e2 && e2.message ? e2.message : e2)); }}
     }}
     async function iniciarScannerNativo(){{
       if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('El navegador no permite cámara.');
-      if(!('BarcodeDetector' in window)) throw new Error('No cargó lector QR y este navegador no tiene BarcodeDetector.');
-      const formatos = ['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','pdf417'];
-      const detector = new BarcodeDetector({{formats: formatos}});
       const video = document.getElementById('qr-video-live');
+      const canvas = document.getElementById('qr-canvas-live');
       const live = document.getElementById('qr-reader-live');
-      if(live) live.innerHTML = '<b>Usando cámara nativa para QR/barras...</b>';
+      if(live) live.innerHTML = '<b>Usando cámara directa...</b><br><small>Detecta QR con jsQR y barras con BarcodeDetector si el navegador lo soporta.</small>';
       const stream = await navigator.mediaDevices.getUserMedia({{video: {{facingMode: {{ideal:'environment'}}}}, audio:false}});
       qrActivo = {{stream: stream, stopped:false}};
       video.srcObject = stream; video.style.display='block';
       await video.play();
-      avisoMovil('Cámara activada. Escanea QR o barras.', true);
+      let detector = null;
+      if('BarcodeDetector' in window){{
+        try{{ detector = new BarcodeDetector({{formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','pdf417']}}); }}catch(e){{}}
+      }}
+      avisoMovil('Cámara activada.', true);
       const loop = async () => {{
         if(!qrActivo || qrActivo.stopped) return;
         try{{
-          const codes = await detector.detect(video);
-          if(codes && codes.length){{
-            const valor = codes[0].rawValue || '';
-            await procesarDniQR(valor);
-            if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); return; }}
+          if(detector){{
+            const codes = await detector.detect(video);
+            if(codes && codes.length){{
+              await procesarDniQR(codes[0].rawValue || '');
+              if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); return; }}
+            }}
+          }}
+          if(window.jsQR && video.videoWidth > 0){{
+            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d', {{willReadFrequently:true}});
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            if(code && code.data){{
+              await procesarDniQR(code.data);
+              if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); return; }}
+            }}
           }}
         }}catch(e){{}}
         requestAnimationFrame(loop);
@@ -2095,12 +2126,11 @@ def consumos():
       const cont = document.getElementById('qr-reader');
       if(cont){{ cont.style.display='none'; cont.innerHTML=''; }}
     }}
-    
     function validarAntesEnviar(e){{
       const lote = document.getElementById('modo_lote')?.checked;
       if(lote){{
         const arr = getLoteArray();
-        if(arr.length === 0){{ e.preventDefault(); avisoMovil('Activa registro masivo, pero no hay DNI válidos guardados.', false); return false; }}
+        if(arr.length === 0){{ e.preventDefault(); avisoMovil('No hay DNI válidos guardados para el registro masivo.', false); return false; }}
         document.getElementById('dni_lote').value = arr.join('\n');
       }}
       return true;
@@ -2108,8 +2138,12 @@ def consumos():
     document.addEventListener('DOMContentLoaded', ()=>{{
       const inp = document.getElementById('dni_consumo');
       if(inp){{
-        inp.addEventListener('paste', ()=>setTimeout(dniInputHandler, 50));
-        inp.addEventListener('keydown', (e)=>{{ if(e.key === 'Enter'){{ e.preventDefault(); buscarTrabajadorConsumo(true); }} }});
+        inp.addEventListener('paste', ()=>setTimeout(dniInputHandler, 40));
+        inp.addEventListener('input', dniInputHandler);
+        inp.addEventListener('keyup', dniInputHandler);
+        inp.addEventListener('change', dniInputHandler);
+        inp.addEventListener('keydown', (e)=>{{ if(e.key === 'Enter'){{ e.preventDefault(); buscarTrabajadorConsumo(true); }}}});
+        setTimeout(()=>inp.focus(), 300);
       }}
       const form = document.getElementById('form_consumo');
       if(form) form.addEventListener('submit', validarAntesEnviar);
