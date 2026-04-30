@@ -1846,10 +1846,12 @@ def consumos():
       <h3 style="margin-top:0">Registrar consumo</h3>
       <form method="post" class="form-grid" id="form_consumo">
         <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige una fecha para consultar. Solo hoy permite registrar." max="{hoy_iso()}">
-        <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
-        <button type="button" id="btn_qr" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Escanear QR</button>
-        <div id="qr-reader" style="display:none;width:320px;max-width:100%;margin:10px 0;grid-column:1/-1"></div>
-        <input id="nombre_trabajador" class="worker-name-field" placeholder="Nombre completo del trabajador" readonly title="Nombre completo del trabajador" {disabled}>
+        <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR/barras" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
+        <input id="nombre_trabajador" class="worker-name-field" placeholder="Nombre aparecerá automáticamente al digitar DNI" readonly title="Nombre completo del trabajador" {disabled}>
+        <button type="button" class="btn-blue" onclick="buscarTrabajadorConsumo(true)" {disabled}>🔎 Buscar trabajador</button>
+        <button type="button" id="btn_qr" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Cámara QR / Barras</button>
+        <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
+        <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px 0;grid-column:1/-1"></div>
         <select name="comedor" {disabled}>
           {''.join([f'<option>{c}</option>' for c in opciones_comedor()])}
         </select>
@@ -1943,7 +1945,7 @@ def consumos():
       if(!inp || !out) return;
       const dni = soloDni(inp.value);
       if(inp.value !== dni) inp.value = dni;
-      if(dni.length < 8){{ out.value=''; ultimoDniValidado=''; return; }}
+      if(dni.length < 8){{ out.value=''; ultimoDniValidado=''; const info=document.getElementById('info_trabajador_consumo'); if(info){{info.style.display='none'; info.innerHTML='';}} return; }}
       if(!force && ultimoDniValidado === dni) return;
       ultimoDniValidado = dni;
       out.value = 'Validando DNI...';
@@ -1952,6 +1954,11 @@ def consumos():
         if(d.ok){{
           out.value = d.nombre || '';
           out.title = d.nombre || '';
+          const info = document.getElementById('info_trabajador_consumo');
+          if(info){{
+            info.style.display = 'block';
+            info.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>' + (d.nombre || '-') + '</div><div><b>DNI</b><br>' + dni + '</div><div><b>Área</b><br>' + (d.area || '-') + '</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>';
+          }}
           if(document.getElementById('modo_lote')?.checked){{
             setTimeout(()=>agregarDniLote(dni, d.nombre), 80);
           }}else{{
@@ -1960,6 +1967,8 @@ def consumos():
         }}else{{
           out.value = 'DNI no encontrado';
           out.title = 'DNI no encontrado';
+          const info = document.getElementById('info_trabajador_consumo');
+          if(info){{ info.style.display='block'; info.innerHTML='<span style="color:#991b1b">DNI no encontrado en Trabajadores: ' + dni + '</span>'; }}
           if(document.getElementById('modo_lote')?.checked) avisoMovil('DNI no encontrado: ' + dni, false);
         }}
       }}catch(e){{ out.value='No se pudo validar DNI'; avisoMovil('Error validando DNI.', false); }}
@@ -2015,6 +2024,8 @@ def consumos():
         const d = await validarDni(dni);
         if(d.ok){{
           if(out) out.value = d.nombre || '';
+          const info = document.getElementById('info_trabajador_consumo');
+          if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>' + (d.nombre || '-') + '</div><div><b>DNI</b><br>' + dni + '</div><div><b>Área</b><br>' + (d.area || '-') + '</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>'; }}
           ultimoDniValidado = dni;
           if(document.getElementById('modo_lote')?.checked){{ agregarDniLote(dni, d.nombre); }}
           else {{ beepOk(); avisoMovil('DNI reconocido: ' + (d.nombre || dni), true); }}
