@@ -1461,6 +1461,13 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
 .badge.lote{background:#dcfce7;color:#166534}
 .badge.lote-off{background:#ffedd5;color:#9a3412}
 
+
+/* ===== FIX FINAL: CHECKBOX NORMAL + BLOQUEO RESPONSABLE + INDICADOR LOTE VISIBLE ===== */
+input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!important;padding:0!important;margin:0 8px 0 0!important;transform:scale(1.15);vertical-align:middle;}
+.label-lote-final{display:flex!important;align-items:center!important;gap:8px!important;min-height:46px!important;border:2px solid #16a34a!important;border-radius:12px!important;padding:10px 12px!important;background:#f0fdf4!important;color:#064e3b!important;font-weight:950!important;}
+.responsable-alerta-final{border:2px solid #ef4444!important;background:#fff1f2!important;}
+.lote-dios-panel{margin-top:8px!important;}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -2026,12 +2033,8 @@ def consumos():
                 d = clean_dni(part)
                 if d and d not in dnis:
                     dnis.append(d)
-            # PRO FIX: si el navegador no alcanzó a llenar el textarea oculto,
-            # usamos el DNI visible como respaldo en el clic final de REGISTRO DE CONSUMO.
-            if not dnis:
-                d_respaldo = clean_dni(request.form.get("dni"))
-                if d_respaldo and len(d_respaldo) == 8:
-                    dnis.append(d_respaldo)
+            # FIX FINAL: en modo masivo SOLO se registran DNIs que aparecieron en el indicador/lote.
+            # No se usa el DNI visible como respaldo, porque eso permitía registrar sin ver el indicador.
             if not dnis:
                 flash("Registro masivo activo, pero aún no hay DNIs guardados en el lote. Digita o escanea un DNI válido y espera el mensaje verde de guardado.", "error")
                 return redirect(url_for("consumos", fecha=fecha))
@@ -2163,11 +2166,11 @@ def consumos():
         <select name="fundo" {disabled}>
           {''.join([f'<option>{f}</option>' for f in opciones_fundo()])}
         </select>
-        <input name="responsable" placeholder="RESPONSABLE (OBLIGATORIO MAYÚSCULAS)" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" {disabled}>
+        <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE (OBLIGATORIO MAYÚSCULAS)" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="10.00" {disabled}>
         <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
-        <label style="font-weight:900"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" onchange="toggleLote()"> Registro masivo / lote</label>
+        <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" onchange="toggleLote()"> Registro masivo / lote</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div id="lote_panel" class="lote-dios-panel">
           <div class="lote-dios-head">
@@ -2203,6 +2206,31 @@ def consumos():
     let dniTimer = null;
     let ultimoDniValidado = '';
     let qrActivo = null;
+
+    function getResponsableConsumo(){{
+      const r = document.getElementById('responsable_consumo');
+      return (r ? r.value : '').toString().trim().toUpperCase();
+    }}
+    function bloquearSiNoHayResponsable(mostrar=true){{
+      const r = document.getElementById('responsable_consumo');
+      const ok = !!getResponsableConsumo();
+      if(!ok){{
+        if(r){{ r.classList.add('responsable-alerta-final'); r.focus(); }}
+        const out = document.getElementById('nombre_trabajador');
+        if(out) out.value = '';
+        const info = document.getElementById('info_trabajador_consumo');
+        if(info){{ info.style.display='block'; info.innerHTML='<span style="color:#991b1b;font-weight:950">⚠️ Primero registra el RESPONSABLE. Sin responsable no se puede detectar DNI ni usar registro masivo.</span>'; }}
+        if(mostrar) avisoMovil('Primero registra el RESPONSABLE.', false);
+        return true;
+      }}
+      if(r) r.classList.remove('responsable-alerta-final');
+      return false;
+    }}
+    function actualizarEstadoLoteResponsable(){{
+      const r = document.getElementById('responsable_consumo');
+      if(r && getResponsableConsumo()) r.classList.remove('responsable-alerta-final');
+      renderPreviewLoteEnTabla(getLoteArray(), getLoteDetalle(), getLoteChecked());
+    }}
     let scannerBusy = false;
     let ultimoScanDni = '';
     let ultimoScanTs = 0;
@@ -2383,6 +2411,7 @@ def consumos():
       return await r.json();
     }}
     async function buscarTrabajadorConsumo(force=false){{
+      if(bloquearSiNoHayResponsable(force)) return;
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
       if(!inp || !out) return;
@@ -2419,11 +2448,18 @@ def consumos():
     function dniInputHandler(){{
       const inp = document.getElementById('dni_consumo');
       if(inp) inp.value = soloDni(inp.value);
+      if(inp && inp.value.length > 0 && bloquearSiNoHayResponsable(false)){{
+        clearTimeout(dniTimer);
+        const out = document.getElementById('nombre_trabajador'); if(out) out.value='';
+        if(inp.value.length === 8) avisoMovil('Primero registra el RESPONSABLE antes de detectar DNI.', false);
+        return;
+      }}
       clearTimeout(dniTimer);
       const espera = (inp && inp.value.length === 8) ? 30 : 130;
       dniTimer = setTimeout(()=>buscarTrabajadorConsumo(false), espera);
     }}
     function agregarDniLote(dni, nombre){{
+      if(bloquearSiNoHayResponsable(true)) return;
       dni = soloDni(dni);
       if(dni.length !== 8) return;
       const arr = getLoteArray();
@@ -2448,6 +2484,7 @@ def consumos():
       setTimeout(()=>inp?.focus(), 120);
     }}
     async function agregarActualAlLote(){{
+      if(bloquearSiNoHayResponsable(true)) return;
       const inp = document.getElementById('dni_consumo');
       const dni = soloDni(inp ? inp.value : '');
       if(dni.length !== 8){{ avisoMovil('Digite o escanee un DNI válido de 8 dígitos.', false); return; }}
@@ -2458,7 +2495,11 @@ def consumos():
       }}catch(e){{ avisoMovil('No se pudo validar el DNI.', false); }}
     }}
     function toggleLote(){{
-      const on = document.getElementById('modo_lote')?.checked;
+      let on = document.getElementById('modo_lote')?.checked;
+      if(on && bloquearSiNoHayResponsable(true)){{
+        const chk = document.getElementById('modo_lote'); if(chk) chk.checked = false;
+        on = false;
+      }}
       const box = document.getElementById('dni_lote');
       const panel = document.getElementById('lote_panel');
       const dni = document.getElementById('dni_consumo');
@@ -2480,6 +2521,7 @@ def consumos():
     }}
     async function procesarDniQR(texto){{
       if(scannerBusy) return;
+      if(bloquearSiNoHayResponsable(true)) return;
       const dni = soloDni(texto);
       if(dni.length !== 8){{ avisoMovil('QR/barras inválido: no contiene DNI de 8 dígitos.', false); return; }}
       const ahoraScan = Date.now();
@@ -2506,6 +2548,7 @@ def consumos():
       setTimeout(()=>{{ scannerBusy=false; }}, document.getElementById('modo_lote')?.checked ? 350 : 900);
     }}
     async function abrirScannerQR(){{
+      if(bloquearSiNoHayResponsable(true)) return;
       const cont = document.getElementById('qr-reader');
       if(!cont) return;
       if(location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'){{
