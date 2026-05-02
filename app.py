@@ -1570,6 +1570,26 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
   #tbody_consumos_principal td:nth-child(15) button{height:38px!important;min-height:38px!important;border-radius:8px!important;background:#991b1b!important;font-size:12px!important;padding:6px!important;}
   .flash{position:sticky!important;top:8px!important;z-index:120!important;margin:6px 0 10px!important;border-radius:12px!important;font-size:13px!important;box-shadow:0 12px 28px rgba(0,0,0,.22)!important;}
 }
+
+
+/* ===== FIX FINAL CÁMARA + ALERTAS MÓVILES ===== */
+.prize-toast-msg{animation:prizeToastIn .18s ease-out both;}
+@keyframes prizeToastIn{from{transform:translateY(-12px);opacity:0}to{transform:translateY(0);opacity:1}}
+#qr-reader{width:100%!important;max-width:390px!important;margin:10px auto!important;grid-column:1/-1!important;}
+.qr-camera-box{grid-column:1/-1!important;width:100%!important;max-width:390px!important;margin:0 auto!important;padding:10px!important;border:1px solid rgba(255,255,255,.12)!important;border-radius:16px!important;background:#101820!important;color:#eef6ff!important;text-align:center!important;box-shadow:0 12px 28px rgba(0,0,0,.25)!important;}
+.qr-live-box,.qr-video-box{width:100%!important;max-width:340px!important;height:min(62vh,430px)!important;aspect-ratio:3/4!important;margin:10px auto 8px!important;border-radius:14px!important;background:#000!important;overflow:hidden!important;display:block;}
+.qr-live-box video,.qr-live-box canvas,#qr-reader-live video,#qr-reader-live canvas{width:100%!important;height:100%!important;object-fit:cover!important;border-radius:14px!important;}
+.qr-video-box{object-fit:cover!important;}
+.qr-actions{display:block!important;margin-top:8px!important;}
+.qr-close-btn{width:100%!important;max-width:340px!important;margin:8px auto 0!important;display:block!important;background:#7f0000!important;border-radius:10px!important;}
+#qr-reader small{display:block!important;margin-top:10px!important;color:#dbeafe!important;text-align:left!important;font-size:12px!important;line-height:1.35!important;}
+@media(max-width:700px){
+  #qr-reader{max-width:100%!important;margin:8px auto!important;padding:0 0 8px!important;}
+  .qr-camera-box{max-width:100%!important;border-radius:12px!important;padding:8px!important;}
+  .qr-live-box,.qr-video-box{max-width:330px!important;height:min(58vh,410px)!important;}
+  #prize_mobile_alert{top:calc(env(safe-area-inset-top,0px) + 12px)!important;z-index:2147483647!important;}
+}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -1696,10 +1716,13 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
     return only.slice(0,8);
   }
   function toast(msg, ok=true){
-    let d = document.createElement('div');
+    const d = document.createElement('div');
+    d.className = 'prize-toast-msg';
     d.textContent = msg;
-    d.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 12px);z-index:2147483647;padding:13px 15px;border-radius:13px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.25);background:'+(ok?'#17a34a':'#b91c1c');
-    document.body.appendChild(d); setTimeout(()=>d.remove(), 1800);
+    const visibles = document.querySelectorAll('.prize-toast-msg').length;
+    const topPx = 12 + (visibles * 58);
+    d.style.cssText = 'position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + '+topPx+'px);z-index:2147483647;padding:12px 14px;border-radius:12px;font-weight:950;color:white;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35);background:'+(ok?'#006b1e':'#a40000')+';border:1px solid rgba(255,255,255,.18);font-size:13px;line-height:1.2;pointer-events:none;';
+    document.body.appendChild(d); setTimeout(()=>d.remove(), 2300);
     try{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); }catch(e){}
   }
   function beep(){
@@ -1828,7 +1851,7 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
       toast('La cámara requiere HTTPS. Usa el enlace de Render con https://', false);
     }
     cont.style.display='block';
-    cont.innerHTML = '<div style="grid-column:1/-1;padding:12px;border:1px solid #dce6f0;border-radius:14px;background:#f8fbff"><b>📷 Cámara QR / Barras activa</b><div id="qr-reader-live" style="width:100%;max-width:460px;margin-top:8px"></div><video id="qr-video-live" playsinline muted autoplay style="display:none;width:100%;max-width:460px;border-radius:12px;margin-top:8px;background:#000"></video><canvas id="qr-canvas-live" style="display:none"></canvas><button type="button" class="btn-red" style="margin-top:8px" onclick="cerrarScannerQR()">Cerrar cámara</button><br><small>Permite la cámara. En celular usa Chrome y HTTPS.</small></div>';
+    cont.innerHTML = '<div class="qr-camera-box"><b>📷 Cámara QR / Barras activa</b><div id="qr-reader-live" class="qr-live-box"></div><video id="qr-video-live" class="qr-video-box" playsinline muted autoplay style="display:none"></video><canvas id="qr-canvas-live" style="display:none"></canvas><button type="button" class="btn-red qr-close-btn" onclick="cerrarScannerQR()">Cerrar cámara</button><small>Permite la cámara. En celular usa Chrome y HTTPS.</small></div>';
     try{
       if(window.Html5Qrcode){
         const formats = window.Html5QrcodeSupportedFormats ? [
@@ -1839,7 +1862,7 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
           Html5QrcodeSupportedFormats.PDF_417
         ].filter(Boolean) : undefined;
         proScanner = new Html5Qrcode('qr-reader-live', formats ? {formatsToSupport:formats, verbose:false} : undefined);
-        await proScanner.start({facingMode:{ideal:'environment'}}, {fps:15, qrbox:{width:280,height:190}, rememberLastUsedCamera:true}, async txt=>{
+        await proScanner.start({facingMode:{ideal:'environment'}}, {fps:15, qrbox:{width:220,height:220}, rememberLastUsedCamera:true}, async txt=>{
           await procesarLectura(txt);
           if(!document.getElementById('modo_lote')?.checked) cerrarScannerQR();
         }, ()=>{});
@@ -1889,6 +1912,54 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
     }
     const btn = document.getElementById('btn_qr');
     if(btn) btn.onclick = window.abrirScannerQR;
+  });
+})();
+</script>
+
+
+<script>
+// ===== FIX FINAL: alertas apiladas y cámara centrada/angosta =====
+(function(){
+  function premioAviso(msg, ok=true){
+    try{
+      const div = document.createElement('div');
+      div.className = 'prize-toast-msg';
+      div.textContent = msg;
+      const visibles = document.querySelectorAll('.prize-toast-msg').length;
+      const topPx = 12 + (visibles * 58);
+      div.style.cssText = 'position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + '+topPx+'px);z-index:2147483647;padding:12px 14px;border-radius:12px;font-weight:950;color:white;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35);background:'+(ok?'#006b1e':'#a40000')+';border:1px solid rgba(255,255,255,.18);font-size:13px;line-height:1.2;pointer-events:none;';
+      document.body.appendChild(div);
+      setTimeout(()=>div.remove(), 2300);
+    }catch(e){ alert(msg); }
+  }
+  window.avisoMovil = premioAviso;
+  window.toastFix = premioAviso;
+  function ajustarCamara(){
+    const cont = document.getElementById('qr-reader');
+    if(!cont) return;
+    cont.style.maxWidth = '390px';
+    cont.style.marginLeft = 'auto';
+    cont.style.marginRight = 'auto';
+    const box = cont.firstElementChild;
+    if(box){ box.classList.add('qr-camera-box'); box.style.maxWidth='390px'; box.style.margin='0 auto'; box.style.textAlign='center'; }
+    const live = document.getElementById('qr-reader-live');
+    if(live){ live.classList.add('qr-live-box'); live.style.maxWidth='340px'; live.style.margin='10px auto 8px'; }
+    const video = document.getElementById('qr-video-live');
+    if(video){ video.classList.add('qr-video-box'); video.style.maxWidth='340px'; video.style.margin='10px auto 8px'; video.style.objectFit='cover'; }
+  }
+  const oldOpen = window.abrirScannerQR;
+  if(typeof oldOpen === 'function'){
+    window.abrirScannerQR = async function(){
+      const r = await oldOpen.apply(this, arguments);
+      setTimeout(ajustarCamara, 80);
+      setTimeout(ajustarCamara, 500);
+      return r;
+    };
+  }
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const btn = document.getElementById('btn_qr');
+    if(btn && typeof window.abrirScannerQR === 'function') btn.onclick = window.abrirScannerQR;
+    ajustarCamara();
   });
 })();
 </script>
@@ -2558,12 +2629,15 @@ def consumos():
     }}
     function avisoMovil(msg, ok=true){{
       const div = document.createElement('div');
+      div.className = 'prize-toast-msg';
       div.textContent = msg;
-      div.style.position='fixed'; div.style.left='12px'; div.style.right='12px'; div.style.top='calc(env(safe-area-inset-top,0px) + 12px)'; div.style.bottom='auto';
+      const visibles = document.querySelectorAll('.prize-toast-msg').length;
+      const topPx = 12 + (visibles * 58);
+      div.style.position='fixed'; div.style.left='10px'; div.style.right='10px'; div.style.top='calc(env(safe-area-inset-top,0px) + '+topPx+'px)'; div.style.bottom='auto';
       div.style.zIndex='2147483647'; div.style.padding='12px 14px'; div.style.borderRadius='12px';
-      div.style.fontWeight='900'; div.style.color='white'; div.style.textAlign='center'; div.style.boxShadow='0 12px 32px rgba(0,0,0,.32)'; div.style.pointerEvents='none';
-      div.style.background = ok ? '#17a34a' : '#b91c1c';
-      document.body.appendChild(div); setTimeout(()=>div.remove(), 1900);
+      div.style.fontWeight='950'; div.style.color='white'; div.style.textAlign='center'; div.style.boxShadow='0 12px 30px rgba(0,0,0,.35)'; div.style.pointerEvents='none';
+      div.style.background = ok ? '#006b1e' : '#a40000'; div.style.border='1px solid rgba(255,255,255,.18)'; div.style.fontSize='13px'; div.style.lineHeight='1.2';
+      document.body.appendChild(div); setTimeout(()=>div.remove(), 2300);
     }}
     async function validarDni(dni){{
       dni = soloDni(dni);
@@ -2716,13 +2790,13 @@ def consumos():
         avisoMovil('La cámara necesita HTTPS. Abre el enlace de Render con https://', false);
       }}
       cont.style.display='block';
-      cont.innerHTML = `<div style="padding:10px;border:1px solid #dce6f0;border-radius:12px;background:#f8fbff">
+      cont.innerHTML = `<div class="qr-camera-box">
         <b>Escáner con cámara activo</b><br>
-        <div id="qr-reader-live" style="width:100%;max-width:430px;margin-top:8px"></div>
-        <video id="qr-video-live" playsinline muted autoplay style="display:none;width:100%;max-width:430px;border-radius:12px;margin-top:8px;background:#000"></video>
+        <div id="qr-reader-live" class="qr-live-box"></div>
+        <video id="qr-video-live" class="qr-video-box" playsinline muted autoplay style="display:none"></video>
         <canvas id="qr-canvas-live" style="display:none"></canvas>
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-          <button type="button" class="btn-red" onclick="cerrarScannerQR()">Cerrar cámara</button>
+        <div class="qr-actions">
+          <button type="button" class="btn-red qr-close-btn" onclick="cerrarScannerQR()">Cerrar cámara</button>
         </div>
         <small class="muted">Permite la cámara. En celular usa Chrome y el enlace HTTPS de Render.</small>
       </div>`;
@@ -2742,7 +2816,7 @@ def consumos():
           qrActivo = new Html5Qrcode('qr-reader-live', formatos ? {{ formatsToSupport: formatos, verbose: false }} : undefined);
           await qrActivo.start(
             {{ facingMode: {{ ideal: 'environment' }} }},
-            {{ fps: 15, qrbox: {{ width: 280, height: 180 }}, rememberLastUsedCamera: true }},
+            {{ fps: 15, qrbox: {{ width: 220, height: 220 }}, rememberLastUsedCamera: true }},
             async (decodedText) => {{ await procesarDniQR(decodedText); if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); }} }},
             () => {{}}
           );
