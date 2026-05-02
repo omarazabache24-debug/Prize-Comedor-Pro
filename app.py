@@ -27,6 +27,7 @@ except Exception:
     psycopg2 = None
 from io import BytesIO
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 from functools import wraps
 from email.message import EmailMessage
 
@@ -51,6 +52,7 @@ ENTREGAS_DIR = os.path.join(BASE_DIR, "reportes_entrega")
 DB_PATH = os.path.join(BASE_DIR, "comedor_prize.db")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 USE_POSTGRES = bool(DATABASE_URL)
+APP_TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "America/Lima"))
 
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -339,8 +341,14 @@ def init_db():
 # =========================
 # HELPERS
 # =========================
+def now_app():
+    """Fecha y hora real del sistema en Perú/Lima por defecto.
+    En Render evita desfase UTC configurando APP_TIMEZONE=America/Lima.
+    """
+    return datetime.now(APP_TZ)
+
 def hoy_iso():
-    return date.today().isoformat()
+    return now_app().date().isoformat()
 
 
 def fecha_peru_txt(fecha_iso=None):
@@ -392,7 +400,7 @@ def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=
 
 
 def hora_now():
-    return datetime.now().strftime("%H:%M")
+    return now_app().strftime("%H:%M:%S")
 
 
 def money(v):
@@ -450,7 +458,7 @@ def cfg_set(clave, valor):
 def registro_bloqueado():
     if cfg_get("bloqueo_activo", "0") != "1":
         return False, ""
-    ahora = datetime.now().strftime("%H:%M")
+    ahora = now_app().strftime("%H:%M")
     inicio = cfg_get("hora_inicio", "00:00")
     fin = cfg_get("hora_fin", "23:59")
     if inicio <= ahora <= fin:
@@ -626,7 +634,7 @@ def send_report_email(to_email, subject, body, attachment_path):
     sender = os.getenv("SMTP_FROM", user or "no-reply@prize.local")
 
     if not host or not user or not password or not to_email:
-        note = os.path.join(REPORT_DIR, f"correo_no_enviado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+        note = os.path.join(REPORT_DIR, f"correo_no_enviado_{now_app().strftime('%Y%m%d_%H%M%S')}.txt")
         with open(note, "w", encoding="utf-8") as f:
             f.write("SMTP no configurado. El Excel fue generado correctamente.\n\n")
             f.write(f"Para: {to_email}\nAsunto: {subject}\nAdjunto: {attachment_path}\n\n{body}")
@@ -667,7 +675,7 @@ def send_admin_user_notice(username, role, action="creado"):
         try:
             note = os.path.join(REPORT_DIR, "notificaciones_usuarios.txt")
             with open(note, "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} | Usuario {action}: {username} | Rol: {role}\n")
+                f.write(f"{now_app():%Y-%m-%d %H:%M:%S} | Usuario {action}: {username} | Rol: {role}\n")
         except Exception:
             pass
         return "DESACTIVADO"
@@ -689,7 +697,7 @@ def send_admin_user_notice(username, role, action="creado"):
         f"Acción: Usuario {action}\n"
         f"Usuario: {username}\n"
         f"Rol: {role}\n"
-        f"Fecha/hora: {datetime.now():%d/%m/%Y %H:%M:%S}\n\n"
+        f"Fecha/hora: {now_app():%d/%m/%Y %H:%M:%S}\n\n"
         "Por seguridad no se envían contraseñas por correo."
     )
     with smtplib.SMTP(host, port, timeout=30) as smtp:
@@ -1444,6 +1452,15 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
 .lote-dios-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.lote-dios-actions button{width:auto!important}.cam-on{background:#052e16!important;color:#dcfce7!important;border:1px solid #22c55e!important;border-radius:12px;padding:8px 10px;font-weight:950;display:inline-flex;align-items:center;gap:8px}
 @media(max-width:760px){.lote-dios-status{grid-template-columns:1fr}.lote-dios-list-head{display:none}.lote-dios-row{grid-template-columns:1fr;gap:3px;border:1px solid #e2e8f0;border-radius:12px;margin:8px}.lote-dios-actions button{width:100%!important}.lote-dios-counter{width:100%}}
 
+
+/* ===== PREVISUALIZACIÓN EN TABLA PRINCIPAL - REGISTRO MASIVO ===== */
+.fila-lote-preview{background:#ecfdf5!important;box-shadow:inset 4px 0 0 #16a34a}
+.fila-lote-preview td{font-weight:850;color:#064e3b}
+.fila-lote-preview.unchecked{background:#fff7ed!important;box-shadow:inset 4px 0 0 #f97316;opacity:.78}
+.lote-check{width:22px!important;height:22px!important;min-height:22px!important;accent-color:#16a34a;cursor:pointer}
+.badge.lote{background:#dcfce7;color:#166534}
+.badge.lote-off{background:#ffedd5;color:#9a3412}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -2083,7 +2100,8 @@ def consumos():
     rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
     tabla = "".join([
         f"""
-        <tr>
+        <tr class="fila-db-consumo">
+          <td></td>
           <td>{r['fecha']}</td>
           <td>{r['hora']}</td>
           <td>{r['dni']}</td>
@@ -2106,7 +2124,7 @@ def consumos():
           </td>
         </tr>
         """ for r in rows
-    ]) or "<tr><td colspan='14'>Sin registros para este filtro.</td></tr>"
+    ]) or "<tr id='fila_sin_registros'><td colspan='15'>Sin registros para este filtro.</td></tr>"
 
     fecha_cerrada = bool(dia_cerrado(fecha))
     fecha_es_hoy = (fecha == hoy_iso())
@@ -2175,6 +2193,7 @@ def consumos():
         </div>
         <textarea id="dni_lote" name="dni_lote" placeholder="DNIs validados para lote" style="display:none;grid-column:1/-1;min-height:90px"></textarea>
         <textarea id="lote_detalle" name="lote_detalle" style="display:none"></textarea>
+        <textarea id="lote_checked" name="lote_checked" style="display:none"></textarea>
         <button id="btn_submit_consumo" {disabled}>REGISTRO DE CONSUMO</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
@@ -2210,10 +2229,41 @@ def consumos():
       if(!det || !det.value) return {{}};
       try{{return JSON.parse(det.value || '{{}}') || {{}};}}catch(e){{return {{}};}}
     }}
+
+    function fechaLocalKey(){{
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return y + '-' + m + '-' + day;
+    }}
+    function getLoteChecked(){{
+      const c = document.getElementById('lote_checked');
+      if(!c || !c.value) return {{}};
+      try{{return JSON.parse(c.value || '{{}}') || {{}};}}catch(e){{return {{}}}}
+    }}
+    function setLoteChecked(obj){{
+      const c = document.getElementById('lote_checked');
+      if(c) c.value = JSON.stringify(obj || {{}});
+      try{{ localStorage.setItem('lote_consumos_checked_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}catch(e){{}}
+    }}
+    function getCheckedLoteArray(){{
+      const arr = getLoteArray();
+      const checked = getLoteChecked();
+      return arr.filter(d => checked[d] !== false);
+    }}
+    function toggleCheckLote(dni, on){{
+      dni = soloDni(dni);
+      const checked = getLoteChecked();
+      checked[dni] = !!on;
+      setLoteChecked(checked);
+      setLoteArray(getLoteArray(), getLoteDetalle());
+    }}
+
     function setLoteDetalle(obj){{
       const det = document.getElementById('lote_detalle');
       if(det) det.value = JSON.stringify(obj || {{}});
-      try{{ localStorage.setItem('lote_consumos_detalle_' + new Date().toISOString().slice(0,10), JSON.stringify(obj || {{}})); }}catch(e){{}}
+      try{{ localStorage.setItem('lote_consumos_detalle_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}catch(e){{}}
     }}
     function setLoteArray(arr, detalle=null){{
       const limpio = [];
@@ -2221,35 +2271,83 @@ def consumos():
       const oldDetalle = detalle || getLoteDetalle();
       const nuevoDetalle = {{}};
       limpio.forEach(d => {{ nuevoDetalle[d] = oldDetalle[d] || ''; }});
+      const oldChecked = getLoteChecked();
+      const nuevoChecked = {{}};
+      limpio.forEach(d => {{ nuevoChecked[d] = (oldChecked[d] === false) ? false : true; }});
+      setLoteChecked(nuevoChecked);
       const box = document.getElementById('dni_lote');
       const lista = document.getElementById('lote_lista');
       const count = document.getElementById('lote_count');
       if(box) box.value = limpio.join('\n');
       setLoteDetalle(nuevoDetalle);
-      if(count) count.textContent = limpio.length + ' DNI';
+      if(count) count.textContent = getCheckedLoteArray().length + ' marcados / ' + limpio.length + ' detectados';
       const big = document.getElementById('lote_total_big');
-      if(big) big.textContent = limpio.length;
+      if(big) big.textContent = getCheckedLoteArray().length;
       const ultimo = document.getElementById('ultimo_dni_lote');
       if(ultimo) ultimo.textContent = limpio.length ? limpio[limpio.length-1] : '-';
       if(lista){{
         lista.innerHTML = limpio.length
-          ? limpio.map((d, i) => `<div class="lote-dios-row"><b>${{i+1}}</b><b>${{d}}</b><span>${{(nuevoDetalle[d] || 'Trabajador validado')}}</span><span class="ok">VALIDADO</span><button type="button" onclick="quitarDniLote('${{d}}')" style="min-height:0;width:38px;padding:6px;border-radius:999px;background:#ef4444;box-shadow:none">×</button></div>`).join('')
+          ? limpio.map((d, i) => {{
+              const on = nuevoChecked[d] !== false;
+              return `<div class="lote-dios-row ${{on ? '' : 'unchecked'}}"><b>${{i+1}}</b><b><input class="lote-check" type="checkbox" ${{on ? 'checked' : ''}} onchange="toggleCheckLote('${{d}}', this.checked)"> ${{d}}</b><span>${{(nuevoDetalle[d] || 'Trabajador validado')}}</span><span class="${{on ? 'ok' : ''}}">${{on ? 'MARCADO' : 'DESMARCADO'}}</span><button type="button" onclick="quitarDniLote('${{d}}')" style="min-height:0;width:38px;padding:6px;border-radius:999px;background:#ef4444;box-shadow:none">×</button></div>`;
+            }}).join('')
           : '<div class="lote-dios-empty">Aún no hay DNIs guardados. Digita o escanea para acumular antes del clic final.</div>';
+        renderPreviewLoteEnTabla(limpio, nuevoDetalle, nuevoChecked);
       }}
-      try{{ localStorage.setItem('lote_consumos_' + new Date().toISOString().slice(0,10), limpio.join('\n')); }}catch(e){{}}
+      try{{ localStorage.setItem('lote_consumos_' + fechaLocalKey(), limpio.join('\n')); }}catch(e){{}}
     }}
+
+    function escHtml(v){{
+      return String(v ?? '').replace(/[&<>"']/g, s => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[s]));
+    }}
+    function renderPreviewLoteEnTabla(arr, detalle, checked){{
+      const tbody = document.getElementById('tbody_consumos_principal');
+      if(!tbody) return;
+      tbody.querySelectorAll('.fila-lote-preview').forEach(x => x.remove());
+      const sin = document.getElementById('fila_sin_registros');
+      if(sin) sin.style.display = arr.length ? 'none' : '';
+      const form = document.getElementById('form_consumo');
+      const fd = new FormData(form || document.createElement('form'));
+      const hoy = document.querySelector('input[name="fecha"]')?.value || fechaLocalKey();
+      const hora = new Date().toLocaleTimeString('es-PE', {{hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}});
+      const tipo = fd.get('tipo') || 'Almuerzo';
+      const comedor = fd.get('comedor') || 'Comedor 01';
+      const fundo = fd.get('fundo') || 'Kawsay Allpa';
+      const responsable = (fd.get('responsable') || '').toString().toUpperCase();
+      const cant = fd.get('cantidad') || '1';
+      const precio = parseFloat(fd.get('precio_unitario') || '10') || 0;
+      const total = (parseFloat(cant || '1') * precio).toFixed(2);
+      const html = arr.map((d, i) => {{
+        const on = checked[d] !== false;
+        return `<tr class="fila-lote-preview ${{on ? '' : 'unchecked'}}">
+          <td><input class="lote-check" type="checkbox" ${{on ? 'checked' : ''}} onchange="toggleCheckLote('${{d}}', this.checked)" title="Marcar/desmarcar antes del registro final"></td>
+          <td>${{escHtml(hoy)}}</td><td>${{escHtml(hora)}}</td><td><b>${{escHtml(d)}}</b></td>
+          <td>${{escHtml(detalle[d] || 'Trabajador validado')}}</td><td>-</td><td>${{escHtml(tipo)}}</td>
+          <td>${{escHtml(comedor)}}</td><td>${{escHtml(fundo)}}</td><td>${{escHtml(responsable || '-')}}</td>
+          <td>${{escHtml(cant)}}</td><td>S/ ${{precio.toFixed(2)}}</td><td>S/ ${{total}}</td>
+          <td><span class="badge ${{on ? 'lote' : 'lote-off'}}">${{on ? 'PENDIENTE LOTE' : 'NO REGISTRAR'}}</span></td>
+          <td><button type="button" onclick="quitarDniLote('${{d}}')" class="btn-red" style="min-height:0;padding:7px 10px">Quitar</button></td>
+        </tr>`;
+      }}).join('');
+      tbody.insertAdjacentHTML('afterbegin', html);
+    }}
+
     function quitarDniLote(dni){{
       const d = soloDni(dni);
       const detalle = getLoteDetalle();
       delete detalle[d];
+      const checked = getLoteChecked();
+      delete checked[d];
+      setLoteChecked(checked);
       const arr = getLoteArray().filter(x => x !== d);
       setLoteArray(arr, detalle);
       avisoMovil('DNI quitado del lote: ' + dni, false);
       setTimeout(()=>document.getElementById('dni_consumo')?.focus(), 100);
     }}
     function limpiarLoteConsumos(){{
+      setLoteChecked({{}});
       setLoteArray([], {{}});
-      try{{ if(sessionStorage.getItem('limpiar_lote_tras_envio') === '1'){{ localStorage.removeItem('lote_consumos_' + new Date().toISOString().slice(0,10)); localStorage.removeItem('lote_consumos_detalle_' + new Date().toISOString().slice(0,10)); sessionStorage.removeItem('limpiar_lote_tras_envio'); }} }}catch(e){{}}
+      try{{ if(sessionStorage.getItem('limpiar_lote_tras_envio') === '1'){{ localStorage.removeItem('lote_consumos_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_detalle_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_checked_' + fechaLocalKey()); sessionStorage.removeItem('limpiar_lote_tras_envio'); }} }}catch(e){{}}
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
       if(inp) inp.value='';
@@ -2514,7 +2612,7 @@ def consumos():
     function validarAntesEnviar(e){{
       const lote = document.getElementById('modo_lote')?.checked;
       if(lote){{
-        let arr = getLoteArray();
+        let arr = getCheckedLoteArray();
         const actual = soloDni(document.getElementById('dni_consumo')?.value || '');
         const nombreActual = document.getElementById('nombre_trabajador')?.value || '';
         if(arr.length === 0 && actual.length === 8 && !/no encontrado|validando|error/i.test(nombreActual)){{
@@ -2522,8 +2620,8 @@ def consumos():
           setLoteArray(arr);
         }}
         if(arr.length === 0){{ e.preventDefault(); avisoMovil('No hay DNI válidos guardados para el registro masivo.', false); return false; }}
-        document.getElementById('dni_lote').value = arr.join('\n');
-        if(!confirm('Se registrarán ' + arr.length + ' consumo(s) para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
+        document.getElementById('dni_lote').value = getCheckedLoteArray().join('\n');
+        if(!confirm('Se registrarán ' + getCheckedLoteArray().length + ' consumo(s) marcados para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
       }}
       try{{ sessionStorage.setItem('limpiar_lote_tras_envio', '1'); }}catch(ex){{}}
       return true;
@@ -2541,11 +2639,13 @@ def consumos():
       const form = document.getElementById('form_consumo');
       if(form) form.addEventListener('submit', validarAntesEnviar);
       try{{
-        const key = 'lote_consumos_' + new Date().toISOString().slice(0,10);
+        const key = 'lote_consumos_' + fechaLocalKey();
         const guardado = localStorage.getItem(key);
         if(guardado && document.getElementById('dni_lote')) document.getElementById('dni_lote').value = guardado;
-        const detGuardado = localStorage.getItem('lote_consumos_detalle_' + new Date().toISOString().slice(0,10));
+        const detGuardado = localStorage.getItem('lote_consumos_detalle_' + fechaLocalKey());
         if(detGuardado && document.getElementById('lote_detalle')) document.getElementById('lote_detalle').value = detGuardado;
+        const chkGuardado = localStorage.getItem('lote_consumos_checked_' + fechaLocalKey());
+        if(chkGuardado && document.getElementById('lote_checked')) document.getElementById('lote_checked').value = chkGuardado;
       }}catch(e){{}}
       toggleLote();
       setLoteArray(getLoteArray());
@@ -2561,9 +2661,11 @@ def consumos():
         <a class="btn btn-blue" href="{url_for('exportar_consumos')}">Exportar Excel</a>
       </div>
       <div class="table-wrap">
-        <table>
-          <tr><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Comedor</th><th>Fundo</th><th>Responsable</th><th>Cant.</th><th>P. Unit.</th><th>Total</th><th>Estado</th><th>Quitar</th></tr>
+        <table id="tabla_consumos_principal">
+          <thead><tr><th>Sel.</th><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Comedor</th><th>Fundo</th><th>Responsable</th><th>Cant.</th><th>P. Unit.</th><th>Total</th><th>Estado</th><th>Quitar</th></tr></thead>
+          <tbody id="tbody_consumos_principal">
           {tabla}
+          </tbody>
         </table>
       </div>
     </div>
@@ -2644,7 +2746,7 @@ def entregas():
             return redirect(url_for("entregas", dni=dni, fecha=fecha))
         for id_ in ids:
             q_exec("UPDATE consumos SET estado='ENTREGADO', entregado_por=?, entregado_en=? WHERE id=? AND estado='PENDIENTE'",
-                   (session["user"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id_))
+                   (session["user"], now_app().strftime("%Y-%m-%d %H:%M:%S"), id_))
             audit_event("ENTREGAR_PEDIDO", "consumos", id_, f"DNI {dni}")
         flash(f"Pedidos entregados: {len(ids)}", "ok")
         return redirect(url_for("entregas", dni=dni, fecha=fecha))
