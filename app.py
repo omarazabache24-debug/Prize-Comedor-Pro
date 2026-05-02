@@ -1590,6 +1590,15 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
   #prize_mobile_alert{top:calc(env(safe-area-inset-top,0px) + 12px)!important;z-index:2147483647!important;}
 }
 
+/* ===== INDICADOR DE LECTURAS AUTOMATICAS ===== */
+.lectura-counter-pro{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;padding:14px 16px;border-radius:18px;background:linear-gradient(135deg,#052e16,#0f8a3a);color:#fff;box-shadow:0 12px 28px rgba(22,163,74,.22);border:1px solid rgba(255,255,255,.14)}
+.lectura-counter-pro .lectura-left{font-weight:950;line-height:1.15}
+.lectura-counter-pro .lectura-sub{font-size:12px;font-weight:800;opacity:.9;margin-top:3px}
+.lectura-counter-pro .lectura-num{min-width:72px;height:58px;border-radius:16px;background:#ffffff;color:#064e3b;display:grid;place-items:center;font-size:30px;font-weight:950;box-shadow:inset 0 0 0 1px rgba(6,78,59,.08)}
+.lectura-counter-pro.ok-flash{animation:lecturaPulse .45s ease-in-out}
+@keyframes lecturaPulse{0%{transform:scale(.98)}50%{transform:scale(1.02)}100%{transform:scale(1)}}
+@media(max-width:700px){.lectura-counter-pro{position:sticky;top:108px;z-index:88;margin:8px 0 10px;padding:12px;border-radius:15px}.lectura-counter-pro .lectura-num{min-width:60px;height:50px;font-size:26px}}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -3088,13 +3097,39 @@ def consumos():
       // ===== AUTO-GUARDADO MASIVO REAL: guarda al detectar DNI válido =====
       let autoGuardandoFix = false;
       let autoGuardadosFix = 0;
+      function ensureLecturaCounterFix(){{
+        let box = document.getElementById('lectura_counter_pro');
+        const form = document.getElementById('form_consumo');
+        if(!box && form){{
+          box = document.createElement('div');
+          box.id = 'lectura_counter_pro';
+          box.className = 'lectura-counter-pro';
+          box.innerHTML = '<div class="lectura-left">📲 Lecturas guardadas automáticamente<div class="lectura-sub">Último DNI: <span id="lectura_ultimo_dni">-</span></div></div><div class="lectura-num" id="lectura_total_num">0</div>';
+          const panel = document.getElementById('auto_guardado_panel');
+          if(panel && panel.parentNode) panel.parentNode.insertBefore(box, panel.nextSibling);
+          else form.insertBefore(box, form.firstChild);
+        }}
+        return box;
+      }}
+      function actualizarLecturaCounterFix(dni){{
+        const box = ensureLecturaCounterFix();
+        const n = document.getElementById('lectura_total_num');
+        const u = document.getElementById('lectura_ultimo_dni');
+        if(n) n.textContent = autoGuardadosFix;
+        if(u) u.textContent = dni || '-';
+        if(box){{
+          box.classList.remove('ok-flash');
+          void box.offsetWidth;
+          box.classList.add('ok-flash');
+        }}
+      }}
       function ensureAutoPanelFix(){{
         let p = document.getElementById('auto_guardado_panel');
         const form = document.getElementById('form_consumo');
         if(!p && form){{
           p = document.createElement('div');
           p.id = 'auto_guardado_panel';
-          p.innerHTML = '<div>✅ Registros automáticos guardados: <span id="auto_guardado_count">0</span></div><div class="mini">Cada DNI válido se guarda en CONSUMOS DE LA FECHA y el campo DNI queda limpio para el siguiente.</div>';
+          p.innerHTML = '<div>✅ Registros automáticos guardados: <span id="auto_guardado_count">0</span></div><div class="mini">Cada lectura válida suma en el indicador y limpia el DNI para continuar.</div>';
           const info = document.getElementById('info_trabajador_consumo');
           if(info && info.parentNode) info.parentNode.insertBefore(p, info.nextSibling);
           else form.insertBefore(p, form.firstChild);
@@ -3139,6 +3174,7 @@ def consumos():
             const c = document.getElementById('auto_guardado_count');
             if(c) c.textContent = autoGuardadosFix;
             if(p) p.style.display = 'block';
+            actualizarLecturaCounterFix(dni);
             if(ind){{ ind.style.display='block'; ind.textContent = data.msg || ('✅ Guardado automático: ' + dni); }}
             try{{ beepOk(); }}catch(e){{}}
             toastFix(data.msg || ('Guardado automático: ' + dni), true);
@@ -3209,7 +3245,7 @@ def consumos():
       }};
 
       document.addEventListener('DOMContentLoaded', function(){{
-        loadLoteFix(); try{{ if(sessionStorage.getItem('limpiar_lote_tras_envio_fix') === '1'){{ localStorage.removeItem(LS_KEY); sessionStorage.removeItem('limpiar_lote_tras_envio_fix'); loteMasivoFix=[]; }} }}catch(ex){{}} ensureIndicatorFix(); const form = document.getElementById('form_consumo'); if(form){{ form.onsubmit = window.validarAntesEnviar; }}
+        loadLoteFix(); try{{ if(sessionStorage.getItem('limpiar_lote_tras_envio_fix') === '1'){{ localStorage.removeItem(LS_KEY); sessionStorage.removeItem('limpiar_lote_tras_envio_fix'); loteMasivoFix=[]; }} }}catch(ex){{}} ensureIndicatorFix(); ensureAutoPanelFix(); ensureLecturaCounterFix(); const form = document.getElementById('form_consumo'); if(form){{ form.onsubmit = window.validarAntesEnviar; }}
         function syncResponsibleLock(){{
           const has = !!responsableFix();
           const inp = document.getElementById('dni_consumo');
