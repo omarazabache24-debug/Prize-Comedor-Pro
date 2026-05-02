@@ -1636,6 +1636,12 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
     inp.value = dni;
     const nombre = document.getElementById('nombre_trabajador') || document.querySelector('[name="nombre"],#nombre');
     if(dni.length < 8){ if(nombre) nombre.value=''; return; }
+    // PARCHE FINAL: si la página Consumos ya cargó el autoguardado, no usar la validación antigua.
+    // Guardar directamente, limpiar DNI y dejar listo para el siguiente.
+    if(window.__ultraAutoSaveActive && typeof window.registrarConsumoAutomaticoFix === 'function'){
+      await window.registrarConsumoAutomaticoFix(dni);
+      return;
+    }
     if(nombre) nombre.value = 'Validando DNI...';
     try{
       const r = await fetch('/api/trabajador/' + encodeURIComponent(dni) + '?_=' + Date.now(), {cache:'no-store', credentials:'same-origin'});
@@ -2891,7 +2897,7 @@ def consumos():
         if(sin) sin.remove();
         tbody.insertAdjacentHTML('afterbegin', rowHtml);
       }}
-      async function registrarConsumoAutomaticoFix(dni){{
+      window.registrarConsumoAutomaticoFix = async function(dni){{
         if(autoGuardandoFix) return;
         if(!validarResponsableFix()){{ limpiarDniParaSiguienteFix(); return; }}
         dni = onlyDni(dni);
@@ -3008,6 +3014,82 @@ def consumos():
         const chk = document.getElementById('modo_lote'); if(chk){{ chk.addEventListener('change', function(){{ if(this.checked && !responsableFix()){{ validarResponsableFix(); }} renderLoteFix(); }}); }}
         ['tipo','comedor','fundo','cantidad','precio_unitario'].forEach(n => {{ const el=document.querySelector(`#form_consumo [name="${{n}}"]`); if(el) el.addEventListener('change', renderTablaPreviewFix); }});
         renderLoteFix();
+      }});
+    }})();
+
+    // ===== ULTRA FIX FINAL 02/05/2026 =====
+    // Al detectar 8 dígitos: guarda, agrega a CONSUMOS DE LA FECHA, limpia DNI y enfoca para el siguiente.
+    // Si RESPONSABLE está vacío: bloquea y borra el DNI.
+    (function(){{
+      window.__ultraAutoSaveActive = true;
+      let ultimoDniUltra = '';
+      let ultimoTsUltra = 0;
+      function ultraOnlyDni(v){{ return String(v||'').replace(/\D/g,'').slice(0,8); }}
+      function ultraResp(){{
+        const r = document.getElementById('responsable_consumo') || document.querySelector('#form_consumo [name="responsable"]');
+        return (r ? r.value : '').toString().trim().toUpperCase();
+      }}
+      function ultraMsg(txt, ok){{
+        const info = document.getElementById('info_trabajador_consumo');
+        if(info){{
+          info.style.display='block';
+          info.innerHTML='<span style="color:'+(ok?'#166534':'#991b1b')+';font-weight:950">'+txt+'</span>';
+        }}
+        try{{ if(typeof toastFix === 'function') toastFix(txt.replace(/<[^>]+>/g,''), !!ok); }}catch(e){{}}
+      }}
+      function ultraClear(){{
+        const inp = document.getElementById('dni_consumo');
+        const out = document.getElementById('nombre_trabajador');
+        if(inp) inp.value='';
+        if(out) out.value='';
+        setTimeout(function(){{ try{{ inp && inp.focus(); }}catch(e){{}} }}, 80);
+      }}
+      async function ultraProcesar(){{
+        const inp = document.getElementById('dni_consumo');
+        if(!inp) return;
+        let dni = ultraOnlyDni(inp.value);
+        inp.value = dni;
+        if(!dni) return;
+        if(!ultraResp()){{
+          ultraMsg('⚠️ Primero registra el RESPONSABLE. No se detecta ni guarda DNI sin responsable.', false);
+          ultraClear();
+          return;
+        }}
+        if(dni.length !== 8) return;
+        const now = Date.now();
+        if(dni === ultimoDniUltra && now - ultimoTsUltra < 1600) return;
+        ultimoDniUltra = dni; ultimoTsUltra = now;
+        if(typeof window.registrarConsumoAutomaticoFix === 'function'){{
+          await window.registrarConsumoAutomaticoFix(dni);
+          ultraClear();
+        }}else if(typeof window.buscarTrabajadorConsumo === 'function'){{
+          await window.buscarTrabajadorConsumo(true);
+          ultraClear();
+        }}
+      }}
+      window.dniInputHandler = function(){{
+        const inp = document.getElementById('dni_consumo');
+        if(!inp) return;
+        inp.value = ultraOnlyDni(inp.value);
+        clearTimeout(window.__ultraDniTimer);
+        if(inp.value.length > 0 && !ultraResp()){{
+          ultraMsg('⚠️ Primero registra el RESPONSABLE. No se detecta ni guarda DNI sin responsable.', false);
+          ultraClear();
+          return;
+        }}
+        if(inp.value.length === 8){{ window.__ultraDniTimer = setTimeout(ultraProcesar, 90); }}
+      }};
+      document.addEventListener('DOMContentLoaded', function(){{
+        const inp = document.getElementById('dni_consumo');
+        if(inp){{
+          inp.oninput = window.dniInputHandler;
+          inp.onkeyup = window.dniInputHandler;
+          inp.onchange = window.dniInputHandler;
+          inp.addEventListener('input', function(){{ setTimeout(window.dniInputHandler, 10); }}, false);
+          inp.addEventListener('paste', function(){{ setTimeout(window.dniInputHandler, 60); }}, false);
+          inp.addEventListener('keydown', function(e){{ if(e.key === 'Enter'){{ e.preventDefault(); ultraProcesar(); }} }}, false);
+          setTimeout(function(){{ try{{ inp.focus(); }}catch(e){{}} }}, 250);
+        }}
       }});
     }})();
     </script>
