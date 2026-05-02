@@ -2487,6 +2487,10 @@ def consumos():
 
     filtros = filtro_bar(url_for("consumos"), fecha_inicio, fecha_fin, buscar)
 
+    # Contador visible para registro masivo/lecturas de la fecha consultada.
+    # Antes esta variable no existía dentro de /consumos y generaba error 500 al hacer clic en Consumos.
+    total_consumos_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
+
     html = topbar("Registro y control de consumos", "Registra por digitación o lector QR usando el DNI") + f"""
     {aviso_bloq}
     {aviso_fecha}
