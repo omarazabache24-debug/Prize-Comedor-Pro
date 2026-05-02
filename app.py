@@ -20,6 +20,7 @@ import os
 import re
 import sqlite3
 import smtplib
+import json
 try:
     import psycopg2
     import psycopg2.extras
@@ -1461,12 +1462,18 @@ body{height:100vh;overflow:hidden!important;background:#eef4f8!important}
 .badge.lote{background:#dcfce7;color:#166534}
 .badge.lote-off{background:#ffedd5;color:#9a3412}
 
+
+/* ===== INDICADOR DE GUARDADO MASIVO ===== */
+.guardando-masivo-overlay{position:fixed;inset:0;background:rgba(2,6,23,.62);z-index:999999;display:none;align-items:center;justify-content:center;padding:18px}
+.guardando-masivo-box{width:min(520px,94vw);background:white;border-radius:20px;padding:24px;border:2px solid #16a34a;box-shadow:0 25px 80px rgba(0,0,0,.35);text-align:center}
+.guardando-masivo-box h2{margin:0 0 8px;color:#064e3b;font-size:24px}.guardando-masivo-box p{margin:5px 0;color:#475569;font-weight:800}.guardando-bar{height:16px;border-radius:999px;background:#e2e8f0;overflow:hidden;margin-top:16px}.guardando-bar span{display:block;height:100%;width:35%;background:linear-gradient(90deg,#16a34a,#0d73b8);border-radius:999px;animation:guardandoMove 1s infinite alternate}@keyframes guardandoMove{from{transform:translateX(-50%)}to{transform:translateX(210%)}}
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
+<div id="guardando_masivo_overlay" class="guardando-masivo-overlay"><div class="guardando-masivo-box"><h2>Guardando registro masivo...</h2><p id="guardando_masivo_texto">Procesando trabajadores marcados.</p><div class="guardando-bar"><span></span></div><p>No cierres esta ventana.</p></div></div>
 
 {% if not session.get('user') %}
   {{content|safe}}
@@ -2020,22 +2027,43 @@ def consumos():
 
         # REGISTRO MASIVO / EN LOTE desde la misma pestaña Consumos.
         if request.form.get("modo_lote") == "1":
-            lote_raw = request.form.get("dni_lote", "")
+            # REGISTRO MASIVO BLINDADO:
+            # 1) Primero lee lote_payload JSON (tabla temporal con checks).
+            # 2) Si el navegador no lo envió, lee dni_lote.
+            # 3) Si aún no hay lote, usa el DNI visible como respaldo.
+            lote_payload = clean_text(request.form.get("lote_payload"))
             dnis = []
-            for part in re.split(r"[\s,;]+", lote_raw):
-                d = clean_dni(part)
-                if d and d not in dnis:
-                    dnis.append(d)
-            # PRO FIX: si el navegador no alcanzó a llenar el textarea oculto,
-            # usamos el DNI visible como respaldo en el clic final de REGISTRO DE CONSUMO.
+            detalle_payload = {}
+            if lote_payload:
+                try:
+                    payload = json.loads(lote_payload)
+                    if isinstance(payload, list):
+                        for item in payload:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("checked") is False:
+                                continue
+                            d = clean_dni(item.get("dni", ""))
+                            if d and len(d) == 8 and d not in dnis:
+                                dnis.append(d)
+                                detalle_payload[d] = clean_text(item.get("nombre", ""))
+                except Exception:
+                    pass
+            if not dnis:
+                lote_raw = request.form.get("dni_lote", "")
+                for part in re.split(r"[\s,;|]+", lote_raw):
+                    d = clean_dni(part)
+                    if d and len(d) == 8 and d not in dnis:
+                        dnis.append(d)
             if not dnis:
                 d_respaldo = clean_dni(request.form.get("dni"))
                 if d_respaldo and len(d_respaldo) == 8:
                     dnis.append(d_respaldo)
             if not dnis:
-                flash("Registro masivo activo, pero aún no hay DNIs guardados en el lote. Digita o escanea un DNI válido y espera el mensaje verde de guardado.", "error")
+                flash("Registro masivo activo, pero no llegó ningún DNI marcado. Marca por lo menos un check en la tabla temporal antes del REGISTRO DE CONSUMO.", "error")
                 return redirect(url_for("consumos", fecha=fecha))
             creados, errores = 0, []
+            audit_event("INICIO_REGISTRO_MASIVO", "consumos", "", f"Intentando registrar {len(dnis)} DNI(s): {', '.join(dnis[:20])}")
             for dni in dnis:
                 trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
                 if not trabajador:
@@ -2194,6 +2222,7 @@ def consumos():
         <textarea id="dni_lote" name="dni_lote" placeholder="DNIs validados para lote" style="display:none;grid-column:1/-1;min-height:90px"></textarea>
         <textarea id="lote_detalle" name="lote_detalle" style="display:none"></textarea>
         <textarea id="lote_checked" name="lote_checked" style="display:none"></textarea>
+        <textarea id="lote_payload" name="lote_payload" style="display:none"></textarea>
         <button id="btn_submit_consumo" {disabled}>REGISTRO DE CONSUMO</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
@@ -2265,6 +2294,18 @@ def consumos():
       if(det) det.value = JSON.stringify(obj || {{}});
       try{{ localStorage.setItem('lote_consumos_detalle_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}catch(e){{}}
     }}
+    function sincronizarPayloadLote(){{
+      const arr = getLoteArray();
+      const detalle = getLoteDetalle();
+      const checked = getLoteChecked();
+      const payload = arr.map(d => ({{dni:d, nombre:detalle[d] || '', checked: checked[d] !== false}}));
+      const p = document.getElementById('lote_payload');
+      if(p) p.value = JSON.stringify(payload);
+      return payload;
+    }}
+    function totalMarcadosLote(){{
+      return sincronizarPayloadLote().filter(x => x.checked).length;
+    }}
     function setLoteArray(arr, detalle=null){{
       const limpio = [];
       arr.forEach(d => {{ d = soloDni(d); if(d && d.length === 8 && !limpio.includes(d)) limpio.push(d); }});
@@ -2295,6 +2336,7 @@ def consumos():
         renderPreviewLoteEnTabla(limpio, nuevoDetalle, nuevoChecked);
       }}
       try{{ localStorage.setItem('lote_consumos_' + fechaLocalKey(), limpio.join('\n')); }}catch(e){{}}
+      sincronizarPayloadLote();
     }}
 
     function escHtml(v){{
@@ -2620,8 +2662,16 @@ def consumos():
           setLoteArray(arr);
         }}
         if(arr.length === 0){{ e.preventDefault(); avisoMovil('No hay DNI válidos guardados para el registro masivo.', false); return false; }}
-        document.getElementById('dni_lote').value = getCheckedLoteArray().join('\n');
-        if(!confirm('Se registrarán ' + getCheckedLoteArray().length + ' consumo(s) marcados para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
+        const payload = sincronizarPayloadLote();
+        const marcados = payload.filter(x => x.checked);
+        document.getElementById('dni_lote').value = marcados.map(x => x.dni).join('\n');
+        if(!confirm('Se registrarán ' + marcados.length + ' consumo(s) marcados para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
+        const overlay = document.getElementById('guardando_masivo_overlay');
+        const texto = document.getElementById('guardando_masivo_texto');
+        if(texto) texto.textContent = 'Guardando ' + marcados.length + ' trabajador(es) marcados. Espere...';
+        if(overlay) overlay.style.display = 'flex';
+        const btn = document.getElementById('btn_submit_consumo');
+        if(btn){{ btn.disabled = true; btn.textContent = 'GUARDANDO MASIVO...'; }}
       }}
       try{{ sessionStorage.setItem('limpiar_lote_tras_envio', '1'); }}catch(ex){{}}
       return true;
@@ -2639,6 +2689,7 @@ def consumos():
       const form = document.getElementById('form_consumo');
       if(form) form.addEventListener('submit', validarAntesEnviar);
       try{{
+        if(sessionStorage.getItem('limpiar_lote_tras_envio') === '1'){{ localStorage.removeItem('lote_consumos_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_detalle_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_checked_' + fechaLocalKey()); sessionStorage.removeItem('limpiar_lote_tras_envio'); }}
         const key = 'lote_consumos_' + fechaLocalKey();
         const guardado = localStorage.getItem(key);
         if(guardado && document.getElementById('dni_lote')) document.getElementById('dni_lote').value = guardado;
