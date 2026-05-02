@@ -2148,6 +2148,10 @@ def consumos():
 
     <div class="card">
       <h3 style="margin-top:0">Registrar consumo</h3>
+      <div id="indicador_masivo_principal" style="margin:8px 0 12px;padding:14px 16px;border-radius:14px;border:2px solid #38bdf8;background:#e0f2fe;color:#075985;font-weight:950;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <span>📦 Registro masivo automático activo: coloca RESPONSABLE y luego digita/escanea DNI. Cada trabajador aparecerá abajo antes de guardar.</span>
+        <span id="indicador_masivo_contador" style="background:#0d73b8;color:white;border-radius:999px;padding:7px 12px">0 en lote</span>
+      </div>
       <form method="post" class="form-grid" id="form_consumo" onsubmit="return validarAntesEnviar(event)">
         <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige una fecha para consultar. Solo hoy permite registrar." max="{hoy_iso()}">
         <input id="dni_consumo" name="dni" placeholder="Digite DNI o escanee QR/barras" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
@@ -2170,7 +2174,7 @@ def consumos():
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="10.00" {disabled}>
         <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
-        <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" onchange="toggleLote()"> Registro masivo / lote</label>
+        <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" checked onchange="toggleLote()"> Registro masivo / lote</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div id="lote_panel" class="lote-dios-panel">
           <div class="lote-dios-head">
@@ -2728,6 +2732,22 @@ def consumos():
         return true;
       }}
       window.validarResponsableFix = validarResponsableFix;
+
+      function bloquearControlesPorResponsable(){{
+        const has = !!responsableFix();
+        const inp = document.getElementById('dni_consumo');
+        const b1 = document.querySelector('button[onclick="buscarTrabajadorConsumo(true)"]');
+        const b2 = document.getElementById('btn_qr');
+        [inp,b1,b2].forEach(el => {{ if(el){{ el.disabled = !has; el.style.opacity = has ? '1' : '.55'; el.style.cursor = has ? '' : 'not-allowed'; }} }});
+        const principal = document.getElementById('indicador_masivo_principal');
+        if(principal){{
+          principal.style.borderColor = has ? '#38bdf8' : '#ef4444';
+          principal.style.background = has ? '#e0f2fe' : '#fff1f2';
+          principal.style.color = has ? '#075985' : '#991b1b';
+          const span = principal.querySelector('span');
+          if(span) span.textContent = has ? '📦 Registro masivo automático activo: digita o escanea DNI. Cada trabajador aparecerá abajo antes de guardar.' : '⚠️ Primero coloca RESPONSABLE. El DNI, búsqueda y cámara están bloqueados hasta completar responsable.';
+        }}
+      }}
       function loadLoteFix(){{
         try{{ loteMasivoFix = JSON.parse(localStorage.getItem(LS_KEY) || '[]') || []; }}catch(e){{ loteMasivoFix = []; }}
         loteMasivoFix = loteMasivoFix.filter(x => onlyDni(x.dni).length === 8).map(x => ({{dni:onlyDni(x.dni), nombre:x.nombre||'', area:x.area||'', checked:x.checked !== false}}));
@@ -2765,6 +2785,9 @@ def consumos():
         const lista = document.getElementById('lote_lista'); const count = document.getElementById('lote_count'); const big = document.getElementById('lote_total_big'); const ultimo = document.getElementById('ultimo_dni_lote');
         if(count) count.textContent = checkedCountFix() + ' marcados / ' + loteMasivoFix.length + ' detectados';
         if(big) big.textContent = checkedCountFix();
+        const contadorPrincipal = document.getElementById('indicador_masivo_contador');
+        if(contadorPrincipal) contadorPrincipal.textContent = checkedCountFix() + ' en lote';
+        try{{ bloquearControlesPorResponsable(); }}catch(e){{}}
         if(ultimo) ultimo.textContent = loteMasivoFix.length ? loteMasivoFix[loteMasivoFix.length-1].dni : '-';
         if(lista){{ lista.innerHTML = loteMasivoFix.length ? loteMasivoFix.map((x,i)=>`<div class="lote-dios-row ${{x.checked !== false ? '' : 'unchecked'}}"><b>${{i+1}}</b><b><input class="lote-check" type="checkbox" ${{x.checked !== false ? 'checked' : ''}} onchange="toggleCheckLote('${{x.dni}}', this.checked)"> ${{x.dni}}</b><span>${{escHtmlFix(x.nombre || 'Trabajador validado')}}</span><span class="${{x.checked !== false ? 'ok' : ''}}">${{x.checked !== false ? 'MARCADO' : 'DESMARCADO'}}</span><button type="button" onclick="quitarDniLote('${{x.dni}}')" style="min-height:0;width:38px;padding:6px;border-radius:999px;background:#ef4444;box-shadow:none">×</button></div>`).join('') : '<div class="lote-dios-empty">Aún no hay DNIs guardados. Coloca responsable y luego digita/escanea.</div>'; }}
         renderTablaPreviewFix();
@@ -2845,13 +2868,15 @@ def consumos():
             if(inp) inp.value='';
             const out=document.getElementById('nombre_trabajador'); if(out) out.value='';
             const info=document.getElementById('info_trabajador_consumo'); if(info){{info.style.display='none'; info.innerHTML='';}}
-            if(chk0 && chk0.checked){{ chk0.checked=false; }}
+          }} else {{
+            if(chk0) chk0.checked = true;
           }}
+          bloquearControlesPorResponsable();
           renderLoteFix();
         }}
         setTimeout(syncResponsibleLock, 80);
         const r = document.querySelector('#form_consumo [name="responsable"]'); if(r){{ r.addEventListener('input', function(){{ this.value=this.value.toUpperCase(); syncResponsibleLock(); renderTablaPreviewFix(); }}); }}
-        const chk = document.getElementById('modo_lote'); if(chk){{ chk.addEventListener('change', function(){{ if(this.checked && !validarResponsableFix()){{ this.checked=false; }} renderLoteFix(); }}); }}
+        const chk = document.getElementById('modo_lote'); if(chk){{ chk.addEventListener('change', function(){{ if(this.checked && !responsableFix()){{ validarResponsableFix(); }} renderLoteFix(); }}); }}
         ['tipo','comedor','fundo','cantidad','precio_unitario'].forEach(n => {{ const el=document.querySelector(`#form_consumo [name="${{n}}"]`); if(el) el.addEventListener('change', renderTablaPreviewFix); }});
         renderLoteFix();
       }});
