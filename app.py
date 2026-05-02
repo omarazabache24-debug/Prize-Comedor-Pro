@@ -1530,6 +1530,46 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
   #fila_sin_registros td::before{content:''!important;}
 }
 
+
+
+/* ===== AJUSTE FINAL PRO CELULAR: LOGIN CENTRADO + CARDS COMPACTAS + ALERTA VISIBLE ===== */
+#prize_mobile_alert{position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 12px);z-index:2147483647;padding:12px 14px;border-radius:14px;font-weight:950;color:#fff;text-align:center;box-shadow:0 14px 34px rgba(0,0,0,.35);pointer-events:none}
+@media(max-width:700px){
+  body:not(.logged-in) .login-page,
+  .login-page{min-height:100dvh!important;height:100dvh!important;padding:14px!important;display:flex!important;align-items:center!important;justify-content:center!important;background:linear-gradient(180deg,#202020,#171717)!important;overflow:hidden!important;}
+  .login-card{width:calc(100vw - 28px)!important;max-width:360px!important;border-radius:18px!important;background:#202020!important;border:1px solid rgba(255,255,255,.14)!important;box-shadow:0 18px 48px rgba(0,0,0,.42)!important;overflow:hidden!important;}
+  .login-card:before{left:-45px!important;bottom:-58px!important;width:220px!important;height:110px!important;background:#002b84!important;border-radius:70% 70% 0 0!important;transform:rotate(6deg)!important;}
+  .login-card:after{right:-55px!important;bottom:-62px!important;width:230px!important;height:120px!important;background:#014012!important;border-radius:65% 65% 0 0!important;transform:rotate(-8deg)!important;}
+  .login-inner{padding:28px 24px 52px!important;text-align:center!important;}
+  .login-inner .logo-word{font-size:56px!important;letter-spacing:-4px!important;line-height:.9!important;color:#bfefff!important;margin:0 auto 14px!important;display:inline-flex!important;align-items:flex-end!important;justify-content:center!important;transform:none!important;}
+  .login-inner .logo-word .e{width:42px!important;height:42px!important;font-size:30px!important;border-width:4px!important;letter-spacing:-2px!important;position:relative!important;}
+  .login-inner .logo-word .leaf{width:13px!important;height:24px!important;top:-27px!important;right:2px!important;}
+  .login-title{font-size:17px!important;color:#eaf2ff!important;margin:4px 0 4px!important;text-align:center!important;}
+  .login-subtitle{font-size:13px!important;color:#aeb8c5!important;margin:0 0 22px!important;text-align:center!important;}
+  .form-label{font-size:12px!important;color:#e5e7eb!important;margin:12px 0 6px!important;text-align:left!important;}
+  .input-icon span{left:12px!important;z-index:2!important;color:#fbbf24!important;font-size:17px!important;top:50%!important;transform:translateY(-50%)!important;}
+  .input-icon input{height:46px!important;min-height:46px!important;background:#2d2d2d!important;border:1px solid #383838!important;border-bottom:2px solid #555!important;border-radius:7px!important;color:#fff!important;padding:10px 12px 10px 40px!important;font-size:13px!important;}
+  .login-button{height:44px!important;min-height:44px!important;border-radius:8px!important;background:#003d08!important;color:white!important;margin-top:20px!important;box-shadow:0 12px 24px rgba(0,60,8,.3)!important;}
+
+  .table-head h3{font-size:18px!important;color:#e7edf7!important;background:#1f2937!important;margin:-10px -10px 8px!important;padding:12px 10px!important;border-radius:0!important;}
+  .table-head .btn,.table-head a{border-radius:8px!important;background:#052d74!important;margin:0 0 12px!important;height:42px!important;}
+  #tabla_consumos_principal{border-spacing:0 7px!important;}
+  #tbody_consumos_principal tr{position:relative!important;background:#ffffff!important;border-radius:13px!important;margin:8px 0!important;padding:10px 10px 10px 12px!important;box-shadow:0 3px 12px rgba(15,23,42,.10)!important;border-left:4px solid #0aa866!important;}
+  #tbody_consumos_principal td{grid-template-columns:72px minmax(0,1fr)!important;gap:8px!important;padding:3px 0!important;font-size:12px!important;line-height:1.22!important;color:#334155!important;}
+  #tbody_consumos_principal td::before{font-size:11px!important;color:#6b7280!important;letter-spacing:.1px!important;}
+  #tbody_consumos_principal td:nth-child(1){display:none!important;}
+  #tbody_consumos_principal td:nth-child(2),
+  #tbody_consumos_principal td:nth-child(3),
+  #tbody_consumos_principal td:nth-child(4){display:inline-grid!important;grid-template-columns:auto 1fr!important;width:33%!important;vertical-align:top!important;}
+  #tbody_consumos_principal td:nth-child(5){font-size:13px!important;font-weight:900!important;color:#111827!important;padding-top:6px!important;}
+  #tbody_consumos_principal td:nth-child(14) .badge,
+  #tbody_consumos_principal td:nth-child(14) span{display:inline-flex!important;justify-content:center!important;width:auto!important;min-width:110px!important;border-radius:999px!important;padding:5px 10px!important;background:#f59e0b!important;color:#fff!important;font-size:11px!important;}
+  #tbody_consumos_principal td:nth-child(15){grid-template-columns:72px 1fr!important;align-items:center!important;padding-top:7px!important;}
+  #tbody_consumos_principal td:nth-child(15) form{display:grid!important;grid-template-columns:1fr 98px!important;gap:6px!important;width:100%!important;}
+  #tbody_consumos_principal td:nth-child(15) input{height:38px!important;min-height:38px!important;font-size:12px!important;border-radius:8px!important;background:#f3f4f6!important;border:1px solid #d1d5db!important;padding:8px!important;}
+  #tbody_consumos_principal td:nth-child(15) button{height:38px!important;min-height:38px!important;border-radius:8px!important;background:#991b1b!important;font-size:12px!important;padding:6px!important;}
+  .flash{position:sticky!important;top:8px!important;z-index:120!important;margin:6px 0 10px!important;border-radius:12px!important;font-size:13px!important;box-shadow:0 12px 28px rgba(0,0,0,.22)!important;}
+}
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -1658,7 +1698,7 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
   function toast(msg, ok=true){
     let d = document.createElement('div');
     d.textContent = msg;
-    d.style.cssText = 'position:fixed;left:12px;right:12px;bottom:18px;z-index:999999;padding:13px 15px;border-radius:13px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.25);background:'+(ok?'#17a34a':'#b91c1c');
+    d.style.cssText = 'position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 12px);z-index:2147483647;padding:13px 15px;border-radius:13px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.25);background:'+(ok?'#17a34a':'#b91c1c');
     document.body.appendChild(d); setTimeout(()=>d.remove(), 1800);
     try{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); }catch(e){}
   }
@@ -2519,9 +2559,9 @@ def consumos():
     function avisoMovil(msg, ok=true){{
       const div = document.createElement('div');
       div.textContent = msg;
-      div.style.position='fixed'; div.style.left='12px'; div.style.right='12px'; div.style.bottom='18px';
-      div.style.zIndex='99999'; div.style.padding='12px 14px'; div.style.borderRadius='12px';
-      div.style.fontWeight='900'; div.style.color='white'; div.style.textAlign='center';
+      div.style.position='fixed'; div.style.left='12px'; div.style.right='12px'; div.style.top='calc(env(safe-area-inset-top,0px) + 12px)'; div.style.bottom='auto';
+      div.style.zIndex='2147483647'; div.style.padding='12px 14px'; div.style.borderRadius='12px';
+      div.style.fontWeight='900'; div.style.color='white'; div.style.textAlign='center'; div.style.boxShadow='0 12px 32px rgba(0,0,0,.32)'; div.style.pointerEvents='none';
       div.style.background = ok ? '#17a34a' : '#b91c1c';
       document.body.appendChild(div); setTimeout(()=>div.remove(), 1900);
     }}
