@@ -1,15 +1,3 @@
-
-# === MEJORA ENTREGA MASIVA ===
-# Simulación básica: reutiliza lógica de consumos
-def procesar_entrega_masiva(lista_dni):
-    resultados=[]
-    for dni in lista_dni:
-        resultados.append({"dni":dni,"estado":"entregado"})
-    return resultados
-
-# === LOGO GLOBAL ===
-LOGO_PRIZE = "/static/logo_prize.jpeg"
-
 # -*- coding: utf-8 -*-
 """
 Sistema Comedor PRIZE - Interfaz PRO
@@ -92,7 +80,7 @@ def internal_error(e):
         <div class="login-page">
           <div class="login-card" style="max-width:520px">
             <div class="login-inner">
-              <div class="logo-word">Priz<span class="e">e<span class="leaf"></span></span></div>
+              <img class="prize-logo-img" src="{{url_for('static', filename='logo_prize.jpeg')}}" alt="Prize Superfruits">
               <h2 class="login-title">Sistema Comedor PRIZE</h2>
               <p class="login-subtitle" style="color:#991b1b;font-weight:900">Se detectó un error interno controlado.</p>
               <p style="font-size:13px;color:#cbd5e1;line-height:1.45">No se perdió información. Se corrigió para no generar redirecciones infinitas.</p>
@@ -1677,9 +1665,21 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
   #contador_lecturas_hoy{font-size:28px!important;}
 }
 
+
+/* ===== LOGO PRIZE REAL EN TODO EL SISTEMA ===== */
+.prize-logo-img{max-width:190px;max-height:86px;object-fit:contain;display:block}
+.hero-brand .prize-logo-img{max-width:210px;max-height:92px;margin:auto}
+.side-logo-pro .prize-logo-img{max-width:150px;max-height:72px;margin:0 auto 4px;background:white;border-radius:14px;padding:6px}
+.login-inner .prize-logo-img{max-width:210px;max-height:100px;margin:0 auto 14px;background:white;border-radius:18px;padding:8px}
+.entrega-pro-panel{border:2px solid #0d73b8;background:linear-gradient(135deg,#eff6ff,#ffffff);border-radius:18px;padding:14px;margin-top:12px}
+.entrega-pro-status{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:12px 0}
+.entrega-pro-status>div{border:1px solid #bfdbfe;background:#dbeafe;border-radius:14px;padding:10px;font-weight:900;color:#0f3c68}
+.entrega-ok-row{background:#ecfdf5!important;box-shadow:inset 5px 0 0 #16a34a}
+@media(max-width:700px){.prize-logo-img{max-width:160px}.hero-brand .prize-logo-img{max-width:155px}.side-logo-pro .prize-logo-img{max-width:130px}.entrega-pro-panel button{width:100%!important}.entrega-pro-panel input,.entrega-pro-panel select{font-size:16px!important}}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com//library.20.0/umd/index.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
@@ -1691,8 +1691,7 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
 
   <header class="hero">
     <div class="hero-brand">
-      <div class="logo-word">Priz<span class="e">e<span class="leaf"></span></span></div>
-      <div class="superfruits">SUPERFRUITS</div>
+      <img class="prize-logo-img" src="{{url_for('static', filename='logo_prize.jpeg')}}" alt="Prize Superfruits">
     </div>
 
     <div>
@@ -1705,8 +1704,7 @@ input[type="checkbox"]{width:auto!important;min-height:0!important;height:18px!i
 <div class="main-layout">
     <aside class="sidebar fixed-prize-sidebar">
       <div class="side-logo-pro">
-        <div class="brand-prize">Priz<span>e</span><i></i></div>
-        <div class="brand-sub">SUPERFRUITS</div>
+        <img class="prize-logo-img" src="{{url_for('static', filename='logo_prize.jpeg')}}" alt="Prize Superfruits">
       </div>
 
       <div class="side-user-card">
@@ -2217,7 +2215,7 @@ def login():
     <div class="login-page">
       <div class="login-card">
         <div class="login-inner">
-          <div class="logo-word">Priz<span class="e">e<span class="leaf"></span></span></div>
+          <img class="prize-logo-img" src="{{url_for('static', filename='logo_prize.jpeg')}}" alt="Prize Superfruits">
           <h2 class="login-title">Sistema Comedor PRIZE</h2>
           <p class="login-subtitle">Acceso al sistema</p>
 
@@ -3506,11 +3504,59 @@ def api_entregas_pedidos():
     pedidos = []
     for i, r in enumerate(rows, 1):
         pedidos.append({
-            "id": r["id"], "n": i, "hora": r["hora"], "tipo": r["tipo"],
+            "id": r["id"], "n": i, "hora": r["hora"], "dni": r["dni"], "trabajador": r["trabajador"], "tipo": r["tipo"],
             "cantidad": r["cantidad"], "observacion": r["observacion"] or "-",
             "estado": r["estado"], "pendiente": r["estado"] == "PENDIENTE"
         })
     return jsonify({"ok": True, "pedidos": pedidos, "count": len(pedidos)})
+
+
+@app.route("/api/entregar_dni_auto", methods=["POST"])
+@login_required
+@roles_required("admin", "rrhh", "comedor")
+def api_entregar_dni_auto():
+    fecha = request.form.get("fecha") or hoy_iso()
+    dni = clean_dni(request.form.get("dni"))
+    responsable = clean_text(request.form.get("responsable") or session.get("user", "")).upper()
+    if fecha != hoy_iso():
+        return jsonify({"ok": False, "msg": "Solo se puede entregar en la fecha actual de hoy."}), 400
+    if dia_cerrado(fecha):
+        return jsonify({"ok": False, "msg": "Día cerrado. No se pueden entregar más pedidos."}), 400
+    if not responsable:
+        return jsonify({"ok": False, "msg": "Primero coloca RESPONSABLE DE ENTREGA."}), 400
+    if len(dni) != 8:
+        return jsonify({"ok": False, "msg": "DNI inválido. Debe tener 8 dígitos."}), 400
+    trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+    if not trabajador:
+        return jsonify({"ok": False, "msg": f"DNI no encontrado o trabajador inactivo: {dni}"}), 404
+    pendientes = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? AND estado='PENDIENTE' ORDER BY hora,id", (fecha, dni))
+    todos = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni))
+    if not todos:
+        return jsonify({"ok": False, "msg": f"{dni} - {trabajador['nombre']} no tiene consumo registrado hoy."}), 404
+    if not pendientes:
+        return jsonify({"ok": False, "msg": f"{dni} - {trabajador['nombre']} ya figura ENTREGADO o sin pendiente."}), 409
+    entregado_en = now_app().strftime("%Y-%m-%d %H:%M:%S")
+    for r in pendientes:
+        q_exec("UPDATE consumos SET estado='ENTREGADO', entregado_por=?, entregado_en=? WHERE id=? AND estado='PENDIENTE'",
+               (responsable or session["user"], entregado_en, r["id"]))
+        audit_event("ENTREGA_AUTO_DNI", "consumos", r["id"], f"DNI {dni} - responsable {responsable}")
+    rows = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni))
+    row_html = "".join([f"""
+      <tr class="entrega-ok-row">
+        <td><input type="checkbox" name="ids" value="{r['id']}" {'disabled' if r['estado']!='PENDIENTE' else 'checked'}></td>
+        <td>{i}</td><td>{r['hora']}</td><td>{r['dni']}</td><td>{r['trabajador']}</td><td>{r['tipo']}</td><td>{r['cantidad']}</td>
+        <td>{r['observacion'] or '-'}</td><td><span class="badge {'ok' if r['estado']=='ENTREGADO' else 'warn'}">{r['estado']}</span></td>
+      </tr>""" for i, r in enumerate(rows, 1)])
+    return jsonify({
+        "ok": True,
+        "msg": f"✅ ENTREGADO: {dni} - {trabajador['nombre']} ({len(pendientes)} pedido(s))",
+        "dni": dni,
+        "nombre": trabajador["nombre"],
+        "area": trabajador["area"],
+        "entregados": len(pendientes),
+        "row_html": row_html,
+        "count": len(rows)
+    })
 
 @app.route("/entregas", methods=["GET", "POST"])
 @login_required
@@ -3523,6 +3569,7 @@ def entregas():
         if dia_cerrado(fecha):
             flash("Día cerrado. No se pueden entregar más pedidos.", "error")
             return redirect(url_for("entregas", fecha=fecha, dni=dni))
+        responsable = clean_text(request.form.get("responsable_entrega") or session.get("user", "")).upper()
         ids = request.form.getlist("ids")
         if request.form.get("entregar_todos") == "1":
             if dni:
@@ -3534,8 +3581,8 @@ def entregas():
             return redirect(url_for("entregas", dni=dni, fecha=fecha))
         for id_ in ids:
             q_exec("UPDATE consumos SET estado='ENTREGADO', entregado_por=?, entregado_en=? WHERE id=? AND estado='PENDIENTE'",
-                   (session["user"], now_app().strftime("%Y-%m-%d %H:%M:%S"), id_))
-            audit_event("ENTREGAR_PEDIDO", "consumos", id_, f"DNI {dni}")
+                   (responsable or session["user"], now_app().strftime("%Y-%m-%d %H:%M:%S"), id_))
+            audit_event("ENTREGAR_PEDIDO", "consumos", id_, f"DNI {dni} - responsable {responsable}")
         flash(f"Pedidos entregados: {len(ids)}", "ok")
         return redirect(url_for("entregas", dni=dni, fecha=fecha))
 
@@ -3545,7 +3592,7 @@ def entregas():
     info = ""
     if dni and trabajador:
         info = f"""
-        <div class="card" style="margin-top:12px;padding:14px">
+        <div class="card" style="margin-top:12px;padding:14px" id="info_trabajador_entrega">
           <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:15px">
             <div><b>Trabajador</b><br>{trabajador['nombre']}</div>
             <div><b>Área</b><br>{trabajador['area']}</div>
@@ -3554,28 +3601,51 @@ def entregas():
         </div>
         """
     elif dni:
-        info = '<div class="flash error">DNI no encontrado o trabajador inactivo.</div>'
+        info = '<div class="flash error" id="info_trabajador_entrega">DNI no encontrado o trabajador inactivo.</div>'
+    else:
+        info = '<div id="info_trabajador_entrega" style="display:none"></div>'
 
     tabla = "".join([
         f"""
         <tr>
           <td><input type="checkbox" name="ids" value="{r['id']}" {'disabled' if r['estado']!='PENDIENTE' else 'checked'}></td>
-          <td>{i}</td><td>{r['hora']}</td><td>{r['tipo']}</td><td>{r['cantidad']}</td>
+          <td>{i}</td><td>{r['hora']}</td><td>{r['dni']}</td><td>{r['trabajador']}</td><td>{r['tipo']}</td><td>{r['cantidad']}</td>
           <td>{r['observacion'] or '-'}</td>
           <td><span class="badge {'ok' if r['estado']=='ENTREGADO' else 'warn'}">{r['estado']}</span></td>
         </tr>
         """ for i, r in enumerate(pedidos, 1)
-    ]) or "<tr><td colspan='7'>Sin pedidos para este DNI hoy.</td></tr>"
+    ]) or "<tr><td colspan='9'>Sin pedidos para este DNI hoy.</td></tr>"
 
-    html = topbar("Entrega de Pedidos", "Valida el DNI y entrega los pedidos del día") + f"""
+    html = topbar("Entrega de Pedidos", "Lectura individual y masiva por DNI igual que Consumos") + f"""
     <div class="card">
-      <form method="get" class="form-grid two">
-        <input type="date" id="fecha_entrega" name="fecha" value="{fecha}">
-        <input id="dni_entrega" name="dni" value="{dni}" placeholder="DNI del trabajador" autofocus>
-        <button class="btn-blue">Buscar</button>
-        <button type="button" class="btn-blue" onclick="refrescarEntregas()">🔄 Actualizar / refrescar</button>
-      </form>
-      {info}
+      <h3 style="margin-top:0">Entrega rápida por DNI</h3>
+      <div class="entrega-pro-panel">
+        <form method="get" class="form-grid two" id="form_entrega_busqueda">
+          <input type="date" id="fecha_entrega" name="fecha" value="{fecha}">
+          <input id="dni_entrega" name="dni" value="{dni}" placeholder="DNI del trabajador" inputmode="numeric" autocomplete="off" maxlength="8" autofocus oninput="dniEntregaHandler()">
+          <input id="nombre_trabajador_entrega" readonly placeholder="Nombre del trabajador" value="{trabajador['nombre'] if trabajador else ''}">
+          <input id="responsable_entrega" name="responsable_entrega" placeholder="RESPONSABLE DE ENTREGA" value="{session.get('user','').upper()}" oninput="this.value=this.value.toUpperCase()">
+          <label class="label-lote-final" style="grid-column:1/-1">
+            <input type="checkbox" id="modo_lote_entrega" checked>
+            Entrega masiva automática: cada DNI válido se ENTREGA al instante y queda listado abajo.
+          </label>
+          <button type="button" class="btn-blue" onclick="buscarTrabajadorEntrega(true)">🔎 Validar / entregar DNI</button>
+          <button type="button" class="btn-blue" onclick="refrescarEntregas()">🔄 Actualizar / refrescar</button>
+          <button type="button" id="btn_qr_entrega" class="btn-orange" onclick="abrirScannerEntrega()">📷 Scanner QR / Barras</button>
+          <button type="button" class="btn-red" onclick="limpiarEntregaRapida()">Limpiar</button>
+        </form>
+        {info}
+        <div class="entrega-pro-status">
+          <div>✅ Entregas guardadas: <b id="entrega_auto_count">0</b></div>
+          <div>📌 Último DNI: <b id="entrega_ultimo_dni">-</b></div>
+          <div>👤 Último trabajador: <b id="entrega_ultimo_nombre">-</b></div>
+        </div>
+        <div id="estado_entrega_auto" style="display:none;padding:12px;border-radius:12px;background:#dcfce7;color:#166534;font-weight:950"></div>
+        <div id="qr_entrega_box" style="display:none;margin-top:12px;padding:12px;border-radius:16px;background:#061a2d;color:white">
+          <div id="qr_entrega_reader" style="width:100%;max-width:380px;margin:auto"></div>
+          <button type="button" class="btn-red" onclick="cerrarScannerEntrega()" style="margin-top:10px">Cerrar scanner</button>
+        </div>
+      </div>
     </div>
 
     <br>
@@ -3587,44 +3657,65 @@ def entregas():
       <form method="post">
         <input type="hidden" name="fecha" value="{fecha}">
         <input type="hidden" name="dni" value="{dni}">
+        <input type="hidden" name="responsable_entrega" id="responsable_entrega_post" value="{session.get('user','').upper()}">
         <div class="table-wrap">
           <table>
-            <thead><tr><th></th><th>#</th><th>Hora</th><th>Tipo</th><th>Cantidad</th><th>Observación</th><th>Estado</th></tr></thead>
+            <thead><tr><th></th><th>#</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Tipo</th><th>Cantidad</th><th>Observación</th><th>Estado</th></tr></thead>
             <tbody id="pedidos_body">{tabla}</tbody>
           </table>
         </div>
         <br>
         <button name="entregar_seleccionado" value="1">Entregar seleccionado</button>
-        <button name="entregar_todos" value="1" class="btn-blue">Entregar todos</button>
+        <button name="entregar_todos" value="1" class="btn-blue">Entregar todos pendientes</button>
       </form>
-      <p class="muted small">Actualización automática activa cada 5 segundos. También puedes usar el botón Actualizar / refrescar.</p>
+      <p class="muted small">Lectura rápida activa. Al digitar o escanear 8 dígitos, valida el DNI y entrega automáticamente los pendientes.</p>
     </div>
     <script>
-    async function refrescarEntregas(){{
-      const dni = document.getElementById('dni_entrega')?.value || '';
-      const fecha = document.getElementById('fecha_entrega')?.value || '';
-      // Sin DNI: muestra todos los pedidos del día. Con DNI: filtra solo ese trabajador.
-      try{{
-        const res = await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}`);
-        const data = await res.json();
-        const body = document.getElementById('pedidos_body');
-        const contador = document.getElementById('contador_pedidos');
-        if(contador) contador.textContent = `${{data.count}} pedido(s)`;
-        if(!body) return;
-        if(!data.pedidos || data.pedidos.length === 0){{
-          body.innerHTML = `<tr><td colspan="7">Sin pedidos para este DNI hoy.</td></tr>`;
-          return;
-        }}
-        body.innerHTML = data.pedidos.map(p => `
-          <tr>
-            <td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente ? 'checked' : 'disabled'}}></td>
-            <td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td>
-            <td>${{p.observacion}}</td>
-            <td><span class="badge ${{p.estado === 'ENTREGADO' ? 'ok' : 'warn'}}">${{p.estado}}</span></td>
-          </tr>`).join('');
-      }}catch(e){{ console.warn('No se pudo refrescar entregas', e); }}
+    let entregaTimer=null, entregaBusy=false, entregaCount=0, qrEntrega=null;
+    function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.length>8 ? d.slice(-8) : d; }}
+    function entregaToast(msg, ok=true){{
+      const d=document.createElement('div'); d.textContent=msg;
+      d.style.cssText='position:fixed;left:10px;right:10px;top:14px;z-index:999999;padding:13px;border-radius:13px;text-align:center;font-weight:950;color:white;background:'+(ok?'#166534':'#991b1b')+';box-shadow:0 12px 30px rgba(0,0,0,.35)';
+      document.body.appendChild(d); setTimeout(()=>d.remove(),2300);
+      try{{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); const C=window.AudioContext||window.webkitAudioContext; const c=new C(); const o=c.createOscillator(); const g=c.createGain(); o.connect(g); g.connect(c.destination); o.frequency.value=ok?980:220; g.gain.value=.08; o.start(); setTimeout(()=>{{o.stop();c.close();}},140); }}catch(e){{}}
     }}
-    setInterval(refrescarEntregas, 5000);
+    function responsableEntrega(){{ return String(document.getElementById('responsable_entrega')?.value||'').trim().toUpperCase(); }}
+    function setEstadoEntrega(msg, ok=true){{ const e=document.getElementById('estado_entrega_auto'); if(e){{ e.style.display='block'; e.style.background=ok?'#dcfce7':'#fee2e2'; e.style.color=ok?'#166534':'#991b1b'; e.textContent=msg; }} }}
+    function limpiarEntregaRapida(){{ const i=document.getElementById('dni_entrega'); const n=document.getElementById('nombre_trabajador_entrega'); if(i){{i.value='';i.focus();}} if(n)n.value=''; setEstadoEntrega('Listo para nueva lectura.', true); }}
+    async function buscarTrabajadorEntrega(force=false){{
+      if(entregaBusy) return;
+      const inp=document.getElementById('dni_entrega'); const nom=document.getElementById('nombre_trabajador_entrega');
+      const fecha=document.getElementById('fecha_entrega')?.value||''; const responsable=responsableEntrega();
+      if(!responsable){{ entregaToast('Primero coloca RESPONSABLE DE ENTREGA.', false); if(inp) inp.value=''; return; }}
+      const dni=onlyDniEntrega(inp?.value||''); if(inp) inp.value=dni; if(dni.length<8) return;
+      entregaBusy=true; if(nom) nom.value='Validando y entregando...'; setEstadoEntrega('⏳ Validando DNI y entregando pedidos pendientes...', true);
+      try{{
+        const fd=new FormData(); fd.append('dni',dni); fd.append('fecha',fecha); fd.append('responsable',responsable);
+        const res=await fetch('/api/entregar_dni_auto', {{method:'POST', body:fd}}); const data=await res.json();
+        if(data.ok){{
+          if(nom) nom.value=data.nombre||''; entregaCount += Number(data.entregados||1);
+          document.getElementById('entrega_auto_count').textContent=entregaCount;
+          document.getElementById('entrega_ultimo_dni').textContent=data.dni||dni;
+          document.getElementById('entrega_ultimo_nombre').textContent=data.nombre||'-';
+          const body=document.getElementById('pedidos_body'); if(body && data.row_html) body.innerHTML=data.row_html;
+          const cont=document.getElementById('contador_pedidos'); if(cont) cont.textContent=(data.count||0)+' pedido(s)';
+          setEstadoEntrega(data.msg, true); entregaToast(data.msg, true);
+        }}else{{ if(nom) nom.value=''; setEstadoEntrega(data.msg||'No se pudo entregar.', false); entregaToast(data.msg||'No se pudo entregar.', false); }}
+      }}catch(e){{ setEstadoEntrega('Error de conexión al entregar.', false); entregaToast('Error de conexión al entregar.', false); }}
+      finally{{ setTimeout(()=>{{ entregaBusy=false; if(inp){{ inp.value=''; inp.focus(); }} }},220); }}
+    }}
+    function dniEntregaHandler(){{ const inp=document.getElementById('dni_entrega'); if(!inp) return; inp.value=onlyDniEntrega(inp.value); clearTimeout(entregaTimer); if(inp.value.length===8) entregaTimer=setTimeout(()=>buscarTrabajadorEntrega(false),70); }}
+    async function refrescarEntregas(){{
+      const dni=document.getElementById('dni_entrega')?.value||''; const fecha=document.getElementById('fecha_entrega')?.value||'';
+      try{{ const res=await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}&fecha=${{encodeURIComponent(fecha)}}`); const data=await res.json(); const body=document.getElementById('pedidos_body'); const contador=document.getElementById('contador_pedidos'); if(contador) contador.textContent=`${{data.count}} pedido(s)`; if(!body) return; if(!data.pedidos||data.pedidos.length===0){{ body.innerHTML='<tr><td colspan="9">Sin pedidos para este DNI hoy.</td></tr>'; return; }} body.innerHTML=data.pedidos.map(p=>`<tr><td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente?'checked':'disabled'}}></td><td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.dni||dni||'-'}}</td><td>${{p.trabajador||'-'}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td><td>${{p.observacion}}</td><td><span class="badge ${{p.estado==='ENTREGADO'?'ok':'warn'}}">${{p.estado}}</span></td></tr>`).join(''); }}catch(e){{console.warn(e)}}
+    }}
+    async function abrirScannerEntrega(){{
+      const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='block';
+      if(typeof Html5Qrcode==='undefined'){{ entregaToast('No cargó librería de cámara. Digita el DNI o recarga.', false); return; }}
+      try{{ cerrarScannerEntrega(); qrEntrega=new Html5Qrcode('qr_entrega_reader'); await qrEntrega.start({{facingMode:'environment'}}, {{fps:12, qrbox:260}}, txt=>{{ const dni=onlyDniEntrega(txt); if(dni.length===8){{ document.getElementById('dni_entrega').value=dni; buscarTrabajadorEntrega(true); }} }}); }}catch(e){{ entregaToast('No se pudo abrir cámara. Revisa permisos del navegador.', false); }}
+    }}
+    function cerrarScannerEntrega(){{ try{{ if(qrEntrega){{ qrEntrega.stop().catch(()=>{{}}); qrEntrega.clear(); qrEntrega=null; }} }}catch(e){{}} const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='none'; }}
+    document.addEventListener('DOMContentLoaded',()=>{{ const r=document.getElementById('responsable_entrega'); const rp=document.getElementById('responsable_entrega_post'); if(r&&rp) r.addEventListener('input',()=>rp.value=r.value.toUpperCase()); }});
     </script>
     """
     return render_page(html, "entregas")
