@@ -1,3 +1,15 @@
+
+# === MEJORA ENTREGA MASIVA ===
+# Simulación básica: reutiliza lógica de consumos
+def procesar_entrega_masiva(lista_dni):
+    resultados=[]
+    for dni in lista_dni:
+        resultados.append({"dni":dni,"estado":"entregado"})
+    return resultados
+
+# === LOGO GLOBAL ===
+LOGO_PRIZE = "/static/logo_prize.jpeg"
+
 # -*- coding: utf-8 -*-
 """
 Sistema Comedor PRIZE - Interfaz PRO
