@@ -85,6 +85,12 @@ def ensure_prize_logo():
 
 ensure_prize_logo()
 
+
+def logo_prize_data_uri():
+    """Logo PRIZE embebido para que se vea incluso en login y Render."""
+    return "data:image/jpeg;base64," + LOGO_PRIZE_B64.strip()
+
+
 app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "prize-comedor-pro-2026")
 
@@ -97,11 +103,11 @@ def internal_error(e):
     """
     app.logger.exception("Error interno controlado: %s", e)
     try:
-        html = """
+        html = f"""
         <div class="login-page">
           <div class="login-card" style="max-width:520px">
             <div class="login-inner">
-              <img class="prize-logo-img" src="{{ url_for('static', filename='logo_prize.jpeg') }}?v=logo-prize-final-20260504" alt="Prize Superfruits">
+              <img class="prize-logo-img" src="{logo_prize_data_uri()}" alt="Prize Superfruits">
               <h2 class="login-title">Sistema Comedor PRIZE</h2>
               <p class="login-subtitle" style="color:#991b1b;font-weight:900">Se detectó un error interno controlado.</p>
               <p style="font-size:13px;color:#cbd5e1;line-height:1.45">No se perdió información. Se corrigió para no generar redirecciones infinitas.</p>
@@ -2273,6 +2279,171 @@ th{
   .kpi-grid,.ind-grid,.mini-kpis{grid-template-columns:1fr!important;}
 }
 
+
+/* ===== AJUSTE SOLICITADO 04/05/2026: LOGO EN LOGIN Y SIN LOGO ARRIBA DEL TÍTULO ===== */
+.hero{grid-template-columns:1fr!important;text-align:center!important;justify-items:center!important;min-height:92px!important;padding:16px 18px!important;}
+.hero .hero-brand{display:none!important;}
+.hero-title-only{width:100%!important;text-align:center!important;}
+.hero-title-only h1{margin:0 0 4px!important;}
+.login-inner .prize-logo-img{display:block!important;width:220px!important;max-width:88%!important;max-height:112px!important;object-fit:contain!important;background:#fff!important;border-radius:20px!important;padding:10px 14px!important;margin:0 auto 18px!important;box-shadow:0 12px 30px rgba(0,0,0,.35)!important;}
+@media(max-width:700px){
+  .hero{display:block!important;min-height:56px!important;padding:10px 12px!important;}
+  .hero-title-only{text-align:left!important;}
+  .hero-title-only h1{font-size:19px!important;line-height:1.1!important;text-align:left!important;}
+  .hero-title-only p{font-size:11px!important;text-align:left!important;}
+  .login-inner .prize-logo-img{width:190px!important;max-height:96px!important;margin-bottom:14px!important;}
+}
+
+
+
+/* =========================================================
+   AJUSTE SOLICITADO: INDICADORES DEL DASHBOARD CENTRADOS
+   ========================================================= */
+.dashboard-kpis-center{
+  width:100%!important;
+  max-width:1120px!important;
+  margin:0 auto 22px!important;
+  display:grid!important;
+  grid-template-columns:repeat(4,minmax(190px,240px))!important;
+  justify-content:center!important;
+  align-items:stretch!important;
+  gap:18px!important;
+}
+.dashboard-kpis-center .kpi-card{
+  justify-content:center!important;
+  text-align:center!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  min-height:148px!important;
+  padding:20px 14px!important;
+}
+.dashboard-kpis-center .icon-circle{
+  margin:0 auto 6px!important;
+  width:60px!important;
+  height:60px!important;
+  font-size:28px!important;
+  flex:none!important;
+}
+.dashboard-kpis-center .label,
+.dashboard-kpis-center .sub,
+.dashboard-kpis-center .num{
+  text-align:center!important;
+  width:100%!important;
+}
+.dashboard-kpis-center .num{
+  font-size:30px!important;
+  line-height:1.05!important;
+}
+@media(max-width:1100px){
+  .dashboard-kpis-center{
+    grid-template-columns:repeat(2,minmax(190px,260px))!important;
+    max-width:580px!important;
+  }
+}
+@media(max-width:620px){
+  .dashboard-kpis-center{
+    grid-template-columns:1fr!important;
+    max-width:360px!important;
+    gap:12px!important;
+    margin-left:auto!important;
+    margin-right:auto!important;
+  }
+  .dashboard-kpis-center .kpi-card{
+    min-height:128px!important;
+  }
+}
+
+
+/* =========================================================
+   AJUSTE FINAL: FONDO LIMPIO Y PRO PARA LOGO PRIZE
+   - Login: logo grande, centrado, fondo blanco limpio y sombra suave
+   - Cabecera: se mantiene sin logo arriba del título para no ocupar espacio
+   - Menú lateral: fondo del logo optimizado si se usa en escritorio
+   ========================================================= */
+.logo-clean-bg,
+.login-inner .prize-logo-img,
+.side-logo-pro .prize-logo-img{
+  background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%)!important;
+  border:1px solid rgba(226,232,240,.95)!important;
+  border-radius:22px!important;
+  padding:12px 18px!important;
+  box-shadow:
+    0 14px 34px rgba(0,0,0,.30),
+    inset 0 1px 0 rgba(255,255,255,.95)!important;
+  object-fit:contain!important;
+  object-position:center!important;
+}
+.login-inner .prize-logo-img{
+  display:block!important;
+  width:245px!important;
+  max-width:90%!important;
+  max-height:128px!important;
+  margin:0 auto 18px!important;
+}
+.login-card{
+  border:1px solid rgba(148,163,184,.28)!important;
+  box-shadow:0 24px 70px rgba(0,0,0,.55)!important;
+}
+.login-inner{
+  padding-top:32px!important;
+}
+.hero .hero-brand{
+  display:none!important;
+}
+.hero{
+  grid-template-columns:1fr!important;
+  text-align:center!important;
+  justify-items:center!important;
+  min-height:88px!important;
+  padding:16px 18px!important;
+}
+.hero-title-only{
+  width:100%!important;
+}
+.hero-title-only h1{
+  margin-top:0!important;
+}
+.side-logo-pro .prize-logo-img{
+  width:156px!important;
+  max-height:78px!important;
+  margin:0 auto 10px!important;
+  padding:8px 12px!important;
+  border-radius:18px!important;
+  box-shadow:0 12px 26px rgba(0,0,0,.22)!important;
+}
+@media(max-width:700px){
+  .login-page{
+    background:
+      radial-gradient(circle at 16% 86%, rgba(0,42,180,.38) 0 19%, transparent 20%),
+      radial-gradient(circle at 92% 90%, rgba(0,100,30,.42) 0 22%, transparent 23%),
+      linear-gradient(180deg,#020617 0%,#050505 100%)!important;
+  }
+  .login-inner .prize-logo-img{
+    width:205px!important;
+    max-height:104px!important;
+    padding:9px 13px!important;
+    border-radius:18px!important;
+    margin-bottom:16px!important;
+  }
+  .hero{
+    display:block!important;
+    min-height:54px!important;
+    padding:10px 12px!important;
+  }
+  .hero-title-only{
+    text-align:left!important;
+  }
+  .hero-title-only h1{
+    text-align:left!important;
+    font-size:19px!important;
+    line-height:1.1!important;
+  }
+  .hero-title-only p{
+    text-align:left!important;
+    font-size:11px!important;
+  }
+}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -2286,11 +2457,7 @@ th{
 <div class="app-shell">
 
   <header class="hero">
-    <div class="hero-brand">
-      <img class="prize-logo-img" src="{{ url_for('static', filename='logo_prize.jpeg') }}?v=logo-prize-final-20260504" alt="Prize Superfruits">
-    </div>
-
-    <div>
+    <div class="hero-title-only">
       <h1>Sistema Comedor PRIZE</h1>
       <p>ERP para la Gestión del Comedor Corporativo</p>
     </div>
@@ -2300,7 +2467,7 @@ th{
 <div class="main-layout">
     <aside class="sidebar fixed-prize-sidebar">
       <div class="side-logo-pro">
-        <img class="prize-logo-img" src="{{ url_for('static', filename='logo_prize.jpeg') }}?v=logo-prize-final-20260504" alt="Prize Superfruits">
+        <img class="prize-logo-img" src="" alt="Prize Superfruits">
       </div>
 
       <div class="side-user-card">
@@ -2807,11 +2974,11 @@ def login():
             return redirect(url_for("dashboard"))
         flash("Usuario o clave incorrecta.", "error")
 
-    html = """
+    html = f"""
     <div class="login-page">
       <div class="login-card">
         <div class="login-inner">
-          <img class="prize-logo-img" src="{{ url_for('static', filename='logo_prize.jpeg') }}?v=logo-prize-final-20260504" alt="Prize Superfruits">
+          <img class="prize-logo-img" src="{logo_prize_data_uri()}" alt="Prize Superfruits">
           <h2 class="login-title">Sistema Comedor PRIZE</h2>
           <p class="login-subtitle">Acceso al sistema</p>
 
@@ -2886,7 +3053,7 @@ def dashboard():
     html = topbar("Dashboard", "Indicadores filtrados por día, mes o año") + admin_buttons
     html += filtro_bar(url_for("dashboard"), fecha_inicio, fecha_fin, buscar)
     html += f"""
-    <div class="kpi-grid">
+    <div class="kpi-grid dashboard-kpis-center">
       <div class="card kpi-card"><div class="icon-circle ic-green">🍴</div><div><div class="label">Consumos filtrados</div><div class="num">{total_filtro['c']}</div><div class="sub">RANGO</div></div></div>
       <div class="card kpi-card"><div class="icon-circle ic-blue">✅</div><div><div class="label">Entregados</div><div class="num">{entregados}</div><div class="sub">confirmados</div></div></div>
       <div class="card kpi-card"><div class="icon-circle ic-purple">⏳</div><div><div class="label">Pendientes</div><div class="num">{pendientes}</div><div class="sub">por entregar</div></div></div>
