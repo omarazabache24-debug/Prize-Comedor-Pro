@@ -2881,15 +2881,15 @@ th{
     const topPx = 12 + (visibles * 58);
     d.style.cssText = 'position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + '+topPx+'px);z-index:2147483647;padding:12px 14px;border-radius:12px;font-weight:950;color:white;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35);background:'+(ok?'#006b1e':'#a40000')+';border:1px solid rgba(255,255,255,.18);font-size:13px;line-height:1.2;pointer-events:none;';
     document.body.appendChild(d); setTimeout(()=>d.remove(), 2300);
-    try{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); }catch(e){}
+    try{{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); }}catch(e){{}
   }
   function beep(){
-    try{
+    try{{
       const C = window.AudioContext || window.webkitAudioContext;
       const c = new C(); const o = c.createOscillator(); const g = c.createGain();
       o.connect(g); g.connect(c.destination); o.frequency.value = 920; g.gain.value = .08;
       o.start(); setTimeout(()=>{o.stop(); c.close();}, 130);
-    }catch(e){}
+    }}catch(e){{}
   }
   function setNombre(data, dni){
     const nombre = document.getElementById('nombre_trabajador') || document.querySelector('[name="nombre"],#nombre');
@@ -2944,7 +2944,7 @@ th{
 
     guardandoAutoBase = true;
     if(nombre) nombre.value = 'Validando y guardando DNI...';
-    try{
+    try{{
       const r = await fetch('/api/trabajador/' + encodeURIComponent(dni) + '?_=' + Date.now(), {cache:'no-store', credentials:'same-origin'});
       const data = await r.json();
       const ok = setNombre(data, dni);
@@ -2971,7 +2971,7 @@ th{
         toast(res.msg || 'No se pudo guardar el consumo.', false);
         limpiarParaSiguiente();
       }
-    }catch(e){
+    }}catch(e){{
       if(nombre) nombre.value='Error validando/guardando DNI';
       toast('Error de conexión al guardar consumo.', false);
       limpiarParaSiguiente();
@@ -3010,7 +3010,7 @@ th{
     }
     cont.style.display='block';
     cont.innerHTML = '<div class="qr-camera-box"><b>📷 Cámara QR / Barras activa</b><div id="qr-reader-live" class="qr-live-box"></div><video id="qr-video-live" class="qr-video-box" playsinline muted autoplay style="display:none"></video><canvas id="qr-canvas-live" style="display:none"></canvas><button type="button" class="btn-red qr-close-btn" onclick="cerrarScannerQR()">Cerrar cámara</button><small>Permite la cámara. En celular usa Chrome y HTTPS.</small></div>';
-    try{
+    try{{
       if(window.Html5Qrcode){
         const formats = window.Html5QrcodeSupportedFormats ? [
           Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.CODE_128,
@@ -3026,7 +3026,7 @@ th{
         }, ()=>{});
         toast('Cámara activada.', true); return;
       }
-    }catch(e){ console.warn('html5-qrcode no abrió, usando respaldo', e); }
+    }}catch(e){{ console.warn('html5-qrcode no abrió, usando respaldo', e); }
     await scannerNativo();
   };
   async function scannerNativo(){
@@ -3036,10 +3036,10 @@ th{
     proStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
     video.srcObject = proStream; video.style.display='block'; await video.play();
     let detector = null;
-    if('BarcodeDetector' in window){ try{ detector = new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','upc_a','upc_e','pdf417']}); }catch(e){} }
+    if('BarcodeDetector' in window){ try{{ detector = new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','upc_a','upc_e','pdf417']}); }}catch(e){{} }
     const loop = async()=>{
       if(!proStream) return;
-      try{
+      try{{
         if(detector){ const codes = await detector.detect(video); if(codes && codes.length){ await procesarLectura(codes[0].rawValue||''); if(!document.getElementById('modo_lote')?.checked){cerrarScannerQR(); return;} } }
         if(window.jsQR && video.videoWidth){
           canvas.width=video.videoWidth; canvas.height=video.videoHeight;
@@ -3047,14 +3047,14 @@ th{
           const img=ctx.getImageData(0,0,canvas.width,canvas.height); const code=jsQR(img.data,img.width,img.height);
           if(code && code.data){ await procesarLectura(code.data); if(!document.getElementById('modo_lote')?.checked){cerrarScannerQR(); return;} }
         }
-      }catch(e){}
+      }}catch(e){{}
       requestAnimationFrame(loop);
     };
     toast('Cámara activada.', true); requestAnimationFrame(loop);
   }
   window.cerrarScannerQR = function(){
-    try{ if(proScanner && proScanner.stop) proScanner.stop().catch(()=>{}).finally(()=>{try{proScanner.clear();}catch(e){}}); }catch(e){}
-    try{ if(proStream){ proStream.getTracks().forEach(t=>t.stop()); } }catch(e){}
+    try{{ if(proScanner && proScanner.stop) proScanner.stop().catch(()=>{}).finally(()=>{try{{proScanner.clear();}}catch(e){{}}); }}catch(e){{}
+    try{{ if(proStream){ proStream.getTracks().forEach(t=>t.stop()); } }}catch(e){{}
     proScanner=null; proStream=null;
     const cont=document.getElementById('qr-reader'); if(cont){cont.style.display='none'; cont.innerHTML='';}
   };
@@ -3070,8 +3070,8 @@ th{
     }
     const btn = document.getElementById('btn_qr');
     if(btn) btn.onclick = window.abrirScannerQR;
-  });
-})();
+  }});
+}})();
 </script>
 
 
@@ -3079,7 +3079,7 @@ th{
 // ===== FIX FINAL: alertas apiladas y cámara centrada/angosta =====
 (function(){
   function premioAviso(msg, ok=true){
-    try{
+    try{{
       const div = document.createElement('div');
       div.className = 'prize-toast-msg';
       div.textContent = msg;
@@ -3088,7 +3088,7 @@ th{
       div.style.cssText = 'position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + '+topPx+'px);z-index:2147483647;padding:12px 14px;border-radius:12px;font-weight:950;color:white;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35);background:'+(ok?'#006b1e':'#a40000')+';border:1px solid rgba(255,255,255,.18);font-size:13px;line-height:1.2;pointer-events:none;';
       document.body.appendChild(div);
       setTimeout(()=>div.remove(), 2300);
-    }catch(e){ alert(msg); }
+    }}catch(e){{ alert(msg); }
   }
   window.avisoMovil = premioAviso;
   window.toastFix = premioAviso;
@@ -3118,8 +3118,8 @@ th{
     const btn = document.getElementById('btn_qr');
     if(btn && typeof window.abrirScannerQR === 'function') btn.onclick = window.abrirScannerQR;
     ajustarCamara();
-  });
-})();
+  }});
+}})();
 </script>
 
 
@@ -3150,13 +3150,13 @@ th{
   const oldFetch = window.fetch;
   window.fetch = async function(){
     const res = await oldFetch.apply(this, arguments);
-    try{
+    try{{
       const url = String(arguments[0] || '');
       if(url.includes('/api/registrar_consumo_auto')){
         const clone = res.clone();
         clone.json().then(data=>{ if(data && data.ok) actualizarContadorLecturas(1); }).catch(()=>{});
       }
-    }catch(e){}
+    }}catch(e){{}
     return res;
   };
 })();
@@ -3702,7 +3702,7 @@ def consumos():
     function getLoteDetalle(){{
       const det = document.getElementById('lote_detalle');
       if(!det || !det.value) return {{}};
-      try{{return JSON.parse(det.value || '{{}}') || {{}};}}catch(e){{return {{}};}}
+      try{{{return JSON.parse(det.value || '{{}}') || {{}};}}}catch(e){{{return {{}};}}
     }}
 
     function fechaLocalKey(){{
@@ -3715,12 +3715,12 @@ def consumos():
     function getLoteChecked(){{
       const c = document.getElementById('lote_checked');
       if(!c || !c.value) return {{}};
-      try{{return JSON.parse(c.value || '{{}}') || {{}};}}catch(e){{return {{}}}}
+      try{{{return JSON.parse(c.value || '{{}}') || {{}};}}}catch(e){{{return {{}}}}
     }}
     function setLoteChecked(obj){{
       const c = document.getElementById('lote_checked');
       if(c) c.value = JSON.stringify(obj || {{}});
-      try{{ localStorage.setItem('lote_consumos_checked_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}catch(e){{}}
+      try{{{ localStorage.setItem('lote_consumos_checked_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}}catch(e){{{}}
     }}
     function getCheckedLoteArray(){{
       const arr = getLoteArray();
@@ -3738,7 +3738,7 @@ def consumos():
     function setLoteDetalle(obj){{
       const det = document.getElementById('lote_detalle');
       if(det) det.value = JSON.stringify(obj || {{}});
-      try{{ localStorage.setItem('lote_consumos_detalle_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}catch(e){{}}
+      try{{{ localStorage.setItem('lote_consumos_detalle_' + fechaLocalKey(), JSON.stringify(obj || {{}})); }}}catch(e){{{}}
     }}
     function setLoteArray(arr, detalle=null){{
       const limpio = [];
@@ -3769,7 +3769,7 @@ def consumos():
           : '<div class="lote-dios-empty">Aún no hay DNIs guardados. Digita o escanea para acumular antes del clic final.</div>';
         renderPreviewLoteEnTabla(limpio, nuevoDetalle, nuevoChecked);
       }}
-      try{{ localStorage.setItem('lote_consumos_' + fechaLocalKey(), limpio.join('\n')); }}catch(e){{}}
+      try{{{ localStorage.setItem('lote_consumos_' + fechaLocalKey(), limpio.join('\n')); }}}catch(e){{{}}
     }}
 
     function escHtml(v){{
@@ -3822,7 +3822,7 @@ def consumos():
     function limpiarLoteConsumos(){{
       setLoteChecked({{}});
       setLoteArray([], {{}});
-      try{{ if(sessionStorage.getItem('limpiar_lote_tras_envio') === '1'){{ localStorage.removeItem('lote_consumos_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_detalle_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_checked_' + fechaLocalKey()); sessionStorage.removeItem('limpiar_lote_tras_envio'); }} }}catch(e){{}}
+      try{{{ if(sessionStorage.getItem('limpiar_lote_tras_envio') === '1'){{ localStorage.removeItem('lote_consumos_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_detalle_' + fechaLocalKey()); localStorage.removeItem('lote_consumos_checked_' + fechaLocalKey()); sessionStorage.removeItem('limpiar_lote_tras_envio'); }} }}}catch(e){{{}}
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
       if(inp) inp.value='';
@@ -3831,7 +3831,7 @@ def consumos():
       setTimeout(()=>inp?.focus(), 100);
     }}
     function beepOk(){{
-      try{{
+      try{{{
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         const ctx = new AudioCtx();
         const osc = ctx.createOscillator();
@@ -3839,7 +3839,7 @@ def consumos():
         osc.connect(gain); gain.connect(ctx.destination);
         osc.frequency.value = 880; gain.gain.value = 0.07;
         osc.start(); setTimeout(()=>{{osc.stop(); ctx.close();}}, 140);
-      }}catch(e){{}}
+      }}}catch(e){{{}}
       if(navigator.vibrate) navigator.vibrate(90);
     }}
     function avisoMovil(msg, ok=true){{
@@ -3871,7 +3871,7 @@ def consumos():
       if(!force && ultimoDniValidado === dni) return;
       ultimoDniValidado = dni;
       out.value = 'Validando DNI...';
-      try{{
+      try{{{
         const d = await validarDni(dni);
         if(d.ok){{
           out.value = d.nombre || '';
@@ -3893,7 +3893,7 @@ def consumos():
           if(info){{ info.style.display='block'; info.innerHTML='<span style="color:#991b1b">DNI no encontrado en Trabajadores: ' + dni + '</span>'; }}
           if(document.getElementById('modo_lote')?.checked) avisoMovil('DNI no encontrado: ' + dni, false);
         }}
-      }}catch(e){{ out.value='No se pudo validar DNI'; avisoMovil('Error validando DNI.', false); }}
+      }}}catch(e){{{ out.value='No se pudo validar DNI'; avisoMovil('Error validando DNI.', false); }}
     }}
     function dniInputHandler(){{
       const inp = document.getElementById('dni_consumo');
@@ -3938,11 +3938,11 @@ def consumos():
       const inp = document.getElementById('dni_consumo');
       const dni = soloDni(inp ? inp.value : '');
       if(dni.length !== 8){{ avisoMovil('Digite o escanee un DNI válido de 8 dígitos.', false); return; }}
-      try{{
+      try{{{
         const d = await validarDni(dni);
         if(d.ok) agregarDniLote(dni, d.nombre || 'Trabajador validado');
         else avisoMovil('DNI no encontrado: ' + dni, false);
-      }}catch(e){{ avisoMovil('No se pudo validar el DNI.', false); }}
+      }}}catch(e){{{ avisoMovil('No se pudo validar el DNI.', false); }}
     }}
     function toggleLote(){{
       let on = document.getElementById('modo_lote')?.checked;
@@ -3981,7 +3981,7 @@ def consumos():
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
       if(inp) inp.value = dni;
-      try{{
+      try{{{
         const d = await validarDni(dni);
         if(d.ok){{
           if(out) out.value = d.nombre || '';
@@ -3994,7 +3994,7 @@ def consumos():
           if(out) out.value = 'DNI no encontrado';
           avisoMovil('DNI no encontrado: ' + dni, false);
         }}
-      }}catch(e){{ avisoMovil('No se pudo validar el DNI.', false); }}
+      }}}catch(e){{{ avisoMovil('No se pudo validar el DNI.', false); }}
       setTimeout(()=>{{ scannerBusy=false; }}, document.getElementById('modo_lote')?.checked ? 350 : 900);
     }}
     async function abrirScannerQR(){{
@@ -4015,7 +4015,7 @@ def consumos():
         </div>
         <small class="muted">Permite la cámara. En celular usa Chrome y el enlace HTTPS de Render.</small>
       </div>`;
-      try{{
+      try{{{
         if(window.Html5Qrcode){{
           const formatos = window.Html5QrcodeSupportedFormats ? [
             Html5QrcodeSupportedFormats.QR_CODE,
@@ -4039,8 +4039,8 @@ def consumos():
           avisoMovil('Cámara activada. En modo masivo NO se apaga al detectar.', true);
           return;
         }}
-      }}catch(e){{ console.warn('Html5Qrcode falló, usando respaldo:', e); }}
-      try{{ await iniciarScannerNativo(); }}
+      }}}catch(e){{{ console.warn('Html5Qrcode falló, usando respaldo:', e); }}
+      try{{{ await iniciarScannerNativo(); }}
       catch(e2){{ alert('No se pudo abrir la cámara. Usa HTTPS de Render, acepta permisos y prueba Chrome/Edge. Detalle: ' + (e2 && e2.message ? e2.message : e2)); }}
     }}
     async function iniciarScannerNativo(){{
@@ -4055,13 +4055,13 @@ def consumos():
       await video.play();
       let detector = null;
       if('BarcodeDetector' in window){{
-        try{{ detector = new BarcodeDetector({{formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','pdf417']}}); }}catch(e){{}}
+        try{{{ detector = new BarcodeDetector({{formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','pdf417']}}); }}}catch(e){{{}}
       }}
       const ce = document.getElementById('camara_estado_lote'); if(ce) ce.innerHTML = '<span class="cam-on">● encendida continua</span>';
       avisoMovil('Cámara activada.', true);
       const loop = async () => {{
         if(!qrActivo || qrActivo.stopped) return;
-        try{{
+        try{{{
           if(detector){{
             const codes = await detector.detect(video);
             if(codes && codes.length){{
@@ -4080,23 +4080,23 @@ def consumos():
               if(!document.getElementById('modo_lote')?.checked){{ cerrarScannerQR(); return; }}
             }}
           }}
-        }}catch(e){{}}
+        }}}catch(e){{{}}
         requestAnimationFrame(loop);
       }};
       requestAnimationFrame(loop);
     }}
     function cerrarScannerQR(){{
-      try{{
+      try{{{
         if(qrActivo){{
           if(typeof qrActivo.stop === 'function'){{
-            qrActivo.stop().catch(()=>{{}}).finally(()=>{{ try{{ qrActivo.clear(); }}catch(e){{}} }});
+            qrActivo.stop().catch(()=>{{}}).finally(()=>{{ try{{{ qrActivo.clear(); }}}catch(e){{{}} }});
           }}
           if(qrActivo.stream){{
             qrActivo.stopped = true;
             qrActivo.stream.getTracks().forEach(t => t.stop());
           }}
         }}
-      }}catch(e){{}}
+      }}}catch(e){{{}}
       qrActivo = null;
       const cont = document.getElementById('qr-reader');
       const ce = document.getElementById('camara_estado_lote'); if(ce) ce.textContent = 'apagada';
@@ -4116,7 +4116,7 @@ def consumos():
         document.getElementById('dni_lote').value = getCheckedLoteArray().join('\n');
         if(!confirm('Se registrarán ' + getCheckedLoteArray().length + ' consumo(s) marcados para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
       }}
-      try{{ sessionStorage.setItem('limpiar_lote_tras_envio', '1'); }}catch(ex){{}}
+      try{{{ sessionStorage.setItem('limpiar_lote_tras_envio', '1'); }}catch(ex){{}}
       return true;
     }}
     document.addEventListener('DOMContentLoaded', ()=>{{
@@ -4131,7 +4131,7 @@ def consumos():
       }}
       const form = document.getElementById('form_consumo');
       if(form) form.addEventListener('submit', validarAntesEnviar);
-      try{{
+      try{{{
         const key = 'lote_consumos_' + fechaLocalKey();
         const guardado = localStorage.getItem(key);
         if(guardado && document.getElementById('dni_lote')) document.getElementById('dni_lote').value = guardado;
@@ -4139,7 +4139,7 @@ def consumos():
         if(detGuardado && document.getElementById('lote_detalle')) document.getElementById('lote_detalle').value = detGuardado;
         const chkGuardado = localStorage.getItem('lote_consumos_checked_' + fechaLocalKey());
         if(chkGuardado && document.getElementById('lote_checked')) document.getElementById('lote_checked').value = chkGuardado;
-      }}catch(e){{}}
+      }}}catch(e){{{}}
       toggleLote();
       setLoteArray(getLoteArray());
     }});
@@ -4163,7 +4163,7 @@ def consumos():
         return digits.slice(0,8);
       }}
       window.soloDni = onlyDni;
-      function toastFix(msg, ok=true){{ try{{ avisoMovil(msg, ok); return; }}catch(e){{}} alert(msg); }}
+      function toastFix(msg, ok=true){{ try{{{ avisoMovil(msg, ok); return; }}}catch(e){{{}} alert(msg); }}
       function responsableFix(){{ const r = document.querySelector('#form_consumo [name="responsable"]'); return String(r ? r.value : '').trim().toUpperCase(); }}
       function validarResponsableFix(){{
         const r = document.querySelector('#form_consumo [name="responsable"]');
@@ -4195,11 +4195,11 @@ def consumos():
         }}
       }}
       function loadLoteFix(){{
-        try{{ loteMasivoFix = JSON.parse(localStorage.getItem(LS_KEY) || '[]') || []; }}catch(e){{ loteMasivoFix = []; }}
+        try{{{ loteMasivoFix = JSON.parse(localStorage.getItem(LS_KEY) || '[]') || []; }}}catch(e){{{ loteMasivoFix = []; }}
         loteMasivoFix = loteMasivoFix.filter(x => onlyDni(x.dni).length === 8).map(x => ({{dni:onlyDni(x.dni), nombre:x.nombre||'', area:x.area||'', checked:x.checked !== false}}));
       }}
       function saveLoteFix(){{
-        try{{ localStorage.setItem(LS_KEY, JSON.stringify(loteMasivoFix)); }}catch(e){{}}
+        try{{{ localStorage.setItem(LS_KEY, JSON.stringify(loteMasivoFix)); }}}catch(e){{{}}
         const hidden = document.getElementById('dni_lote');
         if(hidden) hidden.value = loteMasivoFix.filter(x => x.checked !== false).map(x => x.dni).join('\n');
         const det = document.getElementById('lote_detalle');
@@ -4233,7 +4233,7 @@ def consumos():
         if(big) big.textContent = checkedCountFix();
         const contadorPrincipal = document.getElementById('indicador_masivo_contador');
         if(contadorPrincipal) contadorPrincipal.textContent = checkedCountFix() + ' en lote';
-        try{{ bloquearControlesPorResponsable(); }}catch(e){{}}
+        try{{{ bloquearControlesPorResponsable(); }}}catch(e){{{}}
         if(ultimo) ultimo.textContent = loteMasivoFix.length ? loteMasivoFix[loteMasivoFix.length-1].dni : '-';
         if(lista){{ lista.innerHTML = loteMasivoFix.length ? loteMasivoFix.map((x,i)=>`<div class="lote-dios-row ${{x.checked !== false ? '' : 'unchecked'}}"><b>${{i+1}}</b><b><input class="lote-check" type="checkbox" ${{x.checked !== false ? 'checked' : ''}} onchange="toggleCheckLote('${{x.dni}}', this.checked)"> ${{x.dni}}</b><span>${{escHtmlFix(x.nombre || 'Trabajador validado')}}</span><span class="${{x.checked !== false ? 'ok' : ''}}">${{x.checked !== false ? 'MARCADO' : 'DESMARCADO'}}</span><button type="button" onclick="quitarDniLote('${{x.dni}}')" style="min-height:0;width:38px;padding:6px;border-radius:999px;background:#ef4444;box-shadow:none">×</button></div>`).join('') : '<div class="lote-dios-empty">Aún no hay DNIs guardados. Coloca responsable y luego digita/escanea.</div>'; }}
         renderTablaPreviewFix();
@@ -4251,7 +4251,7 @@ def consumos():
       }}
       window.toggleCheckLote = function(dni,on){{ dni = onlyDni(dni); const item = loteMasivoFix.find(x => x.dni === dni); if(item) item.checked = !!on; renderLoteFix(); }};
       window.quitarDniLote = function(dni){{ dni = onlyDni(dni); loteMasivoFix = loteMasivoFix.filter(x => x.dni !== dni); renderLoteFix(); toastFix('DNI quitado del lote: ' + dni, false); }};
-      window.limpiarLoteConsumos = function(){{ loteMasivoFix = []; try{{ localStorage.removeItem(LS_KEY); }}catch(e){{}} renderLoteFix(); toastFix('Lote temporal limpiado.', false); }};
+      window.limpiarLoteConsumos = function(){{ loteMasivoFix = []; try{{{ localStorage.removeItem(LS_KEY); }}}catch(e){{{}} renderLoteFix(); toastFix('Lote temporal limpiado.', false); }};
       window.agregarDniLote = function(dni,nombre,area){{
         if(!validarResponsableFix()) return false;
         dni = onlyDni(dni); if(dni.length !== 8){{ toastFix('DNI inválido.', false); return false; }}
@@ -4276,7 +4276,7 @@ def consumos():
         const inp = document.getElementById('dni_consumo'); const out = document.getElementById('nombre_trabajador'); if(!inp || !out) return;
         const dni = onlyDni(inp.value); inp.value = dni; if(dni.length < 8){{ out.value=''; return; }}
         out.value='Validando DNI...';
-        try{{ const d = await validarDniFix(dni); if(d && d.ok){{ out.value = d.nombre || ''; const info = document.getElementById('info_trabajador_consumo'); if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(d.nombre||'-')+'</div><div><b>DNI</b><br>'+dni+'</div><div><b>Área</b><br>'+(d.area||'-')+'</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>'; }} if(enLote) window.agregarDniLote(dni, d.nombre || '', d.area || ''); else {{ try{{ beepOk(); }}catch(e){{}} }} }} else {{ out.value='DNI no encontrado'; toastFix('DNI no encontrado: '+dni, false); }} }}catch(e){{ out.value='Error validando DNI'; toastFix('Error consultando trabajador.', false); }}
+        try{{{ const d = await validarDniFix(dni); if(d && d.ok){{ out.value = d.nombre || ''; const info = document.getElementById('info_trabajador_consumo'); if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(d.nombre||'-')+'</div><div><b>DNI</b><br>'+dni+'</div><div><b>Área</b><br>'+(d.area||'-')+'</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>'; }} if(enLote) window.agregarDniLote(dni, d.nombre || '', d.area || ''); else {{ try{{{ beepOk(); }}}catch(e){{{}} }} }} else {{ out.value='DNI no encontrado'; toastFix('DNI no encontrado: '+dni, false); }} }}}catch(e){{{ out.value='Error validando DNI'; toastFix('Error consultando trabajador.', false); }}
       }};
       window.dniInputHandler = function(){{
         const inp = document.getElementById('dni_consumo'); if(!inp) return;
@@ -4296,7 +4296,7 @@ def consumos():
       window.agregarActualAlLote = async function(){{ if(!validarResponsableFix()) return; await window.buscarTrabajadorConsumo(true); }};
       window.validarAntesEnviar = function(e){{
         const enLote = document.getElementById('modo_lote')?.checked; if(!validarResponsableFix()){{ if(e) e.preventDefault(); return false; }}
-        if(enLote){{ const marcados = loteMasivoFix.filter(x => x.checked !== false).map(x => x.dni); if(marcados.length === 0){{ if(e) e.preventDefault(); toastFix('No hay trabajadores marcados para guardar. Escanea/digita y deja check marcado.', false); return false; }} if(!confirm('Se guardarán ' + marcados.length + ' trabajador(es) marcados. ¿Confirmas REGISTRO DE CONSUMO?')){{ if(e) e.preventDefault(); return false; }} const hidden = document.getElementById('dni_lote'); if(hidden) hidden.value = marcados.join('\n'); try{{ sessionStorage.setItem('limpiar_lote_tras_envio_fix', '1'); }}catch(ex){{}} const ind = ensureIndicatorFix(); if(ind){{ ind.style.display='block'; ind.textContent='⏳ Guardando registro masivo: 0 de ' + marcados.length + '...'; }} const btn = document.getElementById('btn_submit_consumo'); if(btn){{ btn.disabled=true; btn.textContent='GUARDANDO MASIVO...'; }} setTimeout(()=>{{ if(ind) ind.textContent='⏳ Enviando y grabando ' + marcados.length + ' trabajador(es) en base de datos...'; }},150); return true; }}
+        if(enLote){{ const marcados = loteMasivoFix.filter(x => x.checked !== false).map(x => x.dni); if(marcados.length === 0){{ if(e) e.preventDefault(); toastFix('No hay trabajadores marcados para guardar. Escanea/digita y deja check marcado.', false); return false; }} if(!confirm('Se guardarán ' + marcados.length + ' trabajador(es) marcados. ¿Confirmas REGISTRO DE CONSUMO?')){{ if(e) e.preventDefault(); return false; }} const hidden = document.getElementById('dni_lote'); if(hidden) hidden.value = marcados.join('\n'); try{{{ sessionStorage.setItem('limpiar_lote_tras_envio_fix', '1'); }}catch(ex){{}} const ind = ensureIndicatorFix(); if(ind){{ ind.style.display='block'; ind.textContent='⏳ Guardando registro masivo: 0 de ' + marcados.length + '...'; }} const btn = document.getElementById('btn_submit_consumo'); if(btn){{ btn.disabled=true; btn.textContent='GUARDANDO MASIVO...'; }} setTimeout(()=>{{ if(ind) ind.textContent='⏳ Enviando y grabando ' + marcados.length + ' trabajador(es) en base de datos...'; }},150); return true; }}
         return true;
       }};
 
@@ -4340,7 +4340,7 @@ def consumos():
         autoGuardandoFix = true;
         const ind = ensureIndicatorFix();
         if(ind){{ ind.style.display='block'; ind.textContent='⏳ Guardando automáticamente DNI ' + dni + '...'; }}
-        try{{
+        try{{{
           const form = document.getElementById('form_consumo');
           const fd = new FormData(form || document.createElement('form'));
           fd.set('dni', dni);
@@ -4355,16 +4355,16 @@ def consumos():
             if(c) c.textContent = autoGuardadosFix;
             if(p) p.style.display = 'block';
             if(ind){{ ind.style.display='block'; ind.textContent = data.msg || ('✅ Guardado automático: ' + dni); }}
-            try{{ beepOk(); }}catch(e){{}}
+            try{{{ beepOk(); }}}catch(e){{{}}
             toastFix(data.msg || ('Guardado automático: ' + dni), true);
             limpiarDniParaSiguienteFix();
-            try{{ loteMasivoFix = []; localStorage.removeItem(LS_KEY); renderLoteFix(); }}catch(e){{}}
+            try{{{ loteMasivoFix = []; localStorage.removeItem(LS_KEY); renderLoteFix(); }}}catch(e){{{}}
           }}else{{
             if(ind){{ ind.style.display='block'; ind.textContent = '❌ ' + (data.msg || 'No se pudo guardar'); }}
             toastFix(data.msg || 'No se pudo guardar el consumo.', false);
             limpiarDniParaSiguienteFix();
           }}
-        }}catch(e){{
+        }}}catch(e){{{
           if(ind){{ ind.style.display='block'; ind.textContent='❌ Error de conexión al guardar.'; }}
           toastFix('Error de conexión al guardar consumo.', false);
           limpiarDniParaSiguienteFix();
@@ -4384,7 +4384,7 @@ def consumos():
         inp.value = dni;
         if(dni.length < 8){{ out.value=''; return; }}
         out.value='Validando DNI...';
-        try{{
+        try{{{
           const d = await validarDniFix(dni);
           if(d && d.ok){{
             out.value = d.nombre || '';
@@ -4396,7 +4396,7 @@ def consumos():
             toastFix('DNI no encontrado: '+dni, false);
             limpiarDniParaSiguienteFix();
           }}
-        }}catch(e){{
+        }}}catch(e){{{
           out.value='Error validando DNI';
           toastFix('Error consultando trabajador.', false);
           limpiarDniParaSiguienteFix();
@@ -4424,7 +4424,7 @@ def consumos():
       }};
 
       document.addEventListener('DOMContentLoaded', function(){{
-        loadLoteFix(); try{{ if(sessionStorage.getItem('limpiar_lote_tras_envio_fix') === '1'){{ localStorage.removeItem(LS_KEY); sessionStorage.removeItem('limpiar_lote_tras_envio_fix'); loteMasivoFix=[]; }} }}catch(ex){{}} ensureIndicatorFix(); const form = document.getElementById('form_consumo'); if(form){{ form.onsubmit = window.validarAntesEnviar; }}
+        loadLoteFix(); try{{{ if(sessionStorage.getItem('limpiar_lote_tras_envio_fix') === '1'){{ localStorage.removeItem(LS_KEY); sessionStorage.removeItem('limpiar_lote_tras_envio_fix'); loteMasivoFix=[]; }} }}catch(ex){{}} ensureIndicatorFix(); const form = document.getElementById('form_consumo'); if(form){{ form.onsubmit = window.validarAntesEnviar; }}
         function syncResponsibleLock(){{
           const has = !!responsableFix();
           const inp = document.getElementById('dni_consumo');
@@ -4750,7 +4750,7 @@ let entregaUltimoDni='-';
 let entregaUltimoNombre='-';
 
 function actualizarIndicadoresEntrega(dni='', nombre=''){
-  try{
+  try{{
     if(dni){ entregaUltimoDni = dni; }
     if(nombre){ entregaUltimoNombre = nombre; }
 
@@ -4761,7 +4761,7 @@ function actualizarIndicadoresEntrega(dni='', nombre=''){
     if(c){ c.innerText = entregaCount; }
     if(d){ d.innerText = entregaUltimoDni || '-'; }
     if(n){ n.innerText = entregaUltimoNombre || '-'; }
-  }catch(e){
+  }}catch(e){{
     console.log('Error indicadores entrega:', e);
   }
 }
@@ -4780,7 +4780,7 @@ function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.l
       const d=document.createElement('div'); d.textContent=msg;
       d.style.cssText='position:fixed;left:10px;right:10px;top:14px;z-index:999999;padding:13px;border-radius:13px;text-align:center;font-weight:950;color:white;background:'+(ok?'#166534':'#991b1b')+';box-shadow:0 12px 30px rgba(0,0,0,.35)';
       document.body.appendChild(d); setTimeout(()=>d.remove(),2300);
-      try{{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); const C=window.AudioContext||window.webkitAudioContext; const c=new C(); const o=c.createOscillator(); const g=c.createGain(); o.connect(g); g.connect(c.destination); o.frequency.value=ok?980:220; g.gain.value=.08; o.start(); setTimeout(()=>{{o.stop();c.close();}},140); }}catch(e){{}}
+      try{{{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); const C=window.AudioContext||window.webkitAudioContext; const c=new C(); const o=c.createOscillator(); const g=c.createGain(); o.connect(g); g.connect(c.destination); o.frequency.value=ok?980:220; g.gain.value=.08; o.start(); setTimeout(()=>{{o.stop();c.close();}},140); }}}catch(e){{{}}
     }}
     function responsableEntrega(){{ return String(document.getElementById('responsable_entrega')?.value||'').trim().toUpperCase(); }}
     function setEstadoEntrega(msg, ok=true){{ const e=document.getElementById('estado_entrega_auto'); if(e){{ e.style.display='block'; e.style.background=ok?'#dcfce7':'#fee2e2'; e.style.color=ok?'#166534':'#991b1b'; e.textContent=msg; }} }}
@@ -4792,7 +4792,7 @@ function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.l
       if(!responsable){{ entregaToast('Primero coloca RESPONSABLE DE ENTREGA.', false); if(inp) inp.value=''; return; }}
       const dni=onlyDniEntrega(inp?.value||''); if(inp) inp.value=dni; if(dni.length<8) return;
       entregaBusy=true; if(nom) nom.value='Validando y entregando...'; setEstadoEntrega('⏳ Validando DNI y entregando pedidos pendientes...', true);
-      try{{
+      try{{{
         const fd=new FormData(); fd.append('dni',dni); fd.append('fecha',fecha); fd.append('responsable',responsable);
         const res=await fetch('/api/entregar_dni_auto', {{method:'POST', body:fd}}); const data=await res.json();
         if(data.ok){{
@@ -4804,20 +4804,20 @@ function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.l
           const cont=document.getElementById('contador_pedidos'); if(cont) cont.textContent=(data.count||0)+' pedido(s)';
           setEstadoEntrega(data.msg, true); entregaToast(data.msg, true);
         }}else{{ if(nom) nom.value=''; setEstadoEntrega(data.msg||'No se pudo entregar.', false); entregaToast(data.msg||'No se pudo entregar.', false); }}
-      }}catch(e){{ setEstadoEntrega('Error de conexión al entregar.', false); entregaToast('Error de conexión al entregar.', false); }}
+      }}}catch(e){{{ setEstadoEntrega('Error de conexión al entregar.', false); entregaToast('Error de conexión al entregar.', false); }}
       finally{{ setTimeout(()=>{{ entregaBusy=false; if(inp){{ inp.value=''; inp.focus(); }} }},220); }}
     }}
     function dniEntregaHandler(){{ const inp=document.getElementById('dni_entrega'); if(!inp) return; inp.value=onlyDniEntrega(inp.value); clearTimeout(entregaTimer); if(inp.value.length===8) entregaTimer=setTimeout(()=>buscarTrabajadorEntrega(false),70); }}
     async function refrescarEntregas(){{
       const dni=document.getElementById('dni_entrega')?.value||''; const fecha=document.getElementById('fecha_entrega')?.value||'';
-      try{{ const res=await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}&fecha=${{encodeURIComponent(fecha)}}`); const data=await res.json(); const body=document.getElementById('pedidos_body'); const contador=document.getElementById('contador_pedidos'); if(contador) contador.textContent=`${{data.count}} pedido(s)`; if(!body) return; if(!data.pedidos||data.pedidos.length===0){{ body.innerHTML='<tr><td colspan="9">Sin pedidos para este DNI hoy.</td></tr>'; return; }} body.innerHTML=data.pedidos.map(p=>`<tr><td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente?'checked':'disabled'}}></td><td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.dni||dni||'-'}}</td><td>${{p.trabajador||'-'}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td><td>${{p.observacion}}</td><td><span class="badge ${{p.estado==='ENTREGADO'?'ok':'warn'}}">${{p.estado}}</span></td></tr>`).join(''); }}catch(e){{console.warn(e)}}
+      try{{{ const res=await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}&fecha=${{encodeURIComponent(fecha)}}`); const data=await res.json(); const body=document.getElementById('pedidos_body'); const contador=document.getElementById('contador_pedidos'); if(contador) contador.textContent=`${{data.count}} pedido(s)`; if(!body) return; if(!data.pedidos||data.pedidos.length===0){{ body.innerHTML='<tr><td colspan="9">Sin pedidos para este DNI hoy.</td></tr>'; return; }} body.innerHTML=data.pedidos.map(p=>`<tr><td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente?'checked':'disabled'}}></td><td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.dni||dni||'-'}}</td><td>${{p.trabajador||'-'}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td><td>${{p.observacion}}</td><td><span class="badge ${{p.estado==='ENTREGADO'?'ok':'warn'}}">${{p.estado}}</span></td></tr>`).join(''); }}}catch(e){{{console.warn(e)}}
     }}
     async function abrirScannerEntrega(){{
       const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='block';
       if(typeof Html5Qrcode==='undefined'){{ entregaToast('No cargó librería de cámara. Digita el DNI o recarga.', false); return; }}
-      try{{ cerrarScannerEntrega(); qrEntrega=new Html5Qrcode('qr_entrega_reader'); await qrEntrega.start({{facingMode:'environment'}}, {{fps:12, qrbox:260}}, txt=>{{ const dni=onlyDniEntrega(txt); if(dni.length===8){{ document.getElementById('dni_entrega').value=dni; buscarTrabajadorEntrega(true); }} }}); }}catch(e){{ entregaToast('No se pudo abrir cámara. Revisa permisos del navegador.', false); }}
+      try{{{ cerrarScannerEntrega(); qrEntrega=new Html5Qrcode('qr_entrega_reader'); await qrEntrega.start({{facingMode:'environment'}}, {{fps:12, qrbox:260}}, txt=>{{ const dni=onlyDniEntrega(txt); if(dni.length===8){{ document.getElementById('dni_entrega').value=dni; buscarTrabajadorEntrega(true); }} }}); }}}catch(e){{{ entregaToast('No se pudo abrir cámara. Revisa permisos del navegador.', false); }}
     }}
-    function cerrarScannerEntrega(){{ try{{ if(qrEntrega){{ qrEntrega.stop().catch(()=>{{}}); qrEntrega.clear(); qrEntrega=null; }} }}catch(e){{}} const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='none'; }}
+    function cerrarScannerEntrega(){{ try{{{ if(qrEntrega){{ qrEntrega.stop().catch(()=>{{}}); qrEntrega.clear(); qrEntrega=null; }} }}}catch(e){{{}} const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='none'; }}
     document.addEventListener('DOMContentLoaded',()=>{{ const r=document.getElementById('responsable_entrega'); const rp=document.getElementById('responsable_entrega_post'); if(r&&rp) r.addEventListener('input',()=>rp.value=r.value.toUpperCase()); }});
     </script>
     """
@@ -5499,7 +5499,7 @@ if __name__ == "__main__":
 
 
 setInterval(function(){
-  try{
+  try{{
     actualizarIndicadoresEntrega();
-  }catch(e){}
+  }}catch(e){{}
 }, 1500);
