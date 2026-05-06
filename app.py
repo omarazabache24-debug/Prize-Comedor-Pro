@@ -3645,7 +3645,7 @@ def consumos():
         <textarea id="lote_detalle" name="lote_detalle" style="display:none"></textarea>
         <textarea id="lote_checked" name="lote_checked" style="display:none"></textarea>
         <button id="btn_submit_consumo" {disabled}>REGISTRO DE CONSUMO</button>
-        <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
+        <a class="btn btn-blue" href="javascript:void(0)" onclick="window.location.reload(true)">Actualizar / refrescar</a>
       </form>
       <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. Al digitar el DNI aparecerá automáticamente el nombre del trabajador.</p>
     </div>
@@ -4744,8 +4744,38 @@ def entregas():
       <p class="muted small">Lectura rápida activa. Al digitar o escanear 8 dígitos, valida el DNI y entrega automáticamente los pendientes.</p>
     </div>
     <script>
-    let entregaTimer=null, entregaBusy=false, entregaCount=0, qrEntrega=null;
-    function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.length>8 ? d.slice(-8) : d; }}
+    
+let entregaTimer=null, entregaBusy=false, entregaCount=0, qrEntrega=null;
+let entregaUltimoDni='-';
+let entregaUltimoNombre='-';
+
+function actualizarIndicadoresEntrega(dni='', nombre=''){
+  try{
+    if(dni){ entregaUltimoDni = dni; }
+    if(nombre){ entregaUltimoNombre = nombre; }
+
+    const c = document.getElementById('entrega_auto_count');
+    const d = document.getElementById('entrega_ultimo_dni');
+    const n = document.getElementById('entrega_ultimo_nombre');
+
+    if(c){ c.innerText = entregaCount; }
+    if(d){ d.innerText = entregaUltimoDni || '-'; }
+    if(n){ n.innerText = entregaUltimoNombre || '-'; }
+  }catch(e){
+    console.log('Error indicadores entrega:', e);
+  }
+}
+
+window.addEventListener('load', function(){
+  actualizarIndicadoresEntrega();
+});
+
+    
+const estadoEntrega=document.getElementById('estado_entrega_auto');
+if(estadoEntrega){
+  estadoEntrega.style.display='block';
+}
+function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.length>8 ? d.slice(-8) : d; }}
     function entregaToast(msg, ok=true){{
       const d=document.createElement('div'); d.textContent=msg;
       d.style.cssText='position:fixed;left:10px;right:10px;top:14px;z-index:999999;padding:13px;border-radius:13px;text-align:center;font-weight:950;color:white;background:'+(ok?'#166534':'#991b1b')+';box-shadow:0 12px 30px rgba(0,0,0,.35)';
@@ -5465,3 +5495,11 @@ init_db()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=os.getenv("FLASK_DEBUG", "0") == "1")
+
+
+
+setInterval(function(){
+  try{
+    actualizarIndicadoresEntrega();
+  }catch(e){}
+}, 1500);
