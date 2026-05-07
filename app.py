@@ -526,10 +526,12 @@ def require_remove_key(clave):
     return str(clave or "").strip() == cfg_get("clave_quitar", "1234")
 
 def opciones_comedor():
-    return [f"Comedor {i:02d}" for i in range(1, 11)]
+    # Opciones por defecto: Vivadis
+    return ["Comedor 01","Comedor 02","Comedor 03","Comedor 03A","Comedor 04","Comedor 04A","Comedor 05","Comedor 06","Comedor 07","Comedor 07A","Comedor 08","Comedor 09"]
 
 def opciones_fundo():
-    return ["Kawsay Allpa", "Ayllu Allpa", "Vivadis", "Arena Azul"]
+    # Fundos oficiales según relación enviada
+    return ["Vivadis", "Santa Teresa", "Ayllu Allpa"]
 
 
 def normalize_columns(cols):
@@ -2796,56 +2798,7 @@ body.sidebar-collapsed .content{width:100%!important;max-width:none!important}
 .modo-prueba-box{margin-top:12px;padding:12px;border-radius:18px;background:rgba(250,204,21,.10);border:1px solid rgba(250,204,21,.35);color:#fff}.modo-prueba-box b{color:#fde68a}.modo-prueba-box form{display:grid;gap:8px;margin-top:8px}.modo-prueba-box button{min-height:38px!important;border-radius:13px!important;font-size:12px!important;font-weight:950!important}
 
 </style>
-<script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous">
-const COMEDORES_POR_FUNDO = {
-  "Vivadis": [
-    "Comedor 01","Comedor 02","Comedor 03","Comedor 03A",
-    "Comedor 04","Comedor 04A","Comedor 05","Comedor 06",
-    "Comedor 07","Comedor 07A","Comedor 08","Comedor 09"
-  ],
-  "Santa Teresa": [
-    "Comedor 10","Comedor 11","Comedor 12","Comedor 12A",
-    "Comedor 09A","Comedor 10B","Comedor 13","Comedor 14",
-    "Comedor 15","Comedor 16","Comedor 11B","Comedor 17"
-  ],
-  "Kawsay Allpa": [
-    "Comedor 20","Comedor 21","Comedor 22","Comedor 23",
-    "Comedor 24","Comedor 25","Comedor 26","Comedor 27"
-  ]
-};
-
-function actualizarComedoresPorFundo(){
-    const fundo = document.getElementById("fundo_select");
-    const comedor = document.getElementById("comedor_select");
-    if(!fundo || !comedor) return;
-
-    
-    const seleccion = fundo.value || "Vivadis";
-        
-    const lista = COMEDORES_POR_FUNDO[seleccion] || [];
-
-    comedor.innerHTML = "";
-
-    lista.forEach(item => {
-        const opt = document.createElement("option");
-        opt.value = item;
-        opt.textContent = item;
-        comedor.appendChild(opt);
-    });
-}
-
-
-setTimeout(function(){
-    if(document.getElementById("fundo_select")){
-        actualizarComedoresPorFundo();
-    }
-}, 500);
-
-document.addEventListener("DOMContentLoaded", function(){
-    actualizarComedoresPorFundo();
-});
-
-</script>
+<script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js" crossorigin="anonymous"></script>
 </head>
@@ -3282,6 +3235,67 @@ function toggleSidebarPrize(){
 document.addEventListener('DOMContentLoaded', function(){
   try{ if(localStorage.getItem('sidebarPrizeCollapsed') === '1'){ document.body.classList.add('sidebar-collapsed'); } }catch(e){}
 });
+</script>
+
+
+
+
+
+<script>
+/* ==========================================================
+   RELACIÓN DEFINITIVA FUNDO -> COMEDORES
+   Según imágenes enviadas:
+   Vivadis: 01 a 09
+   Santa Teresa: 09A, 10, 10B, 11, 11B, 12, 12A, 13, 14, 15, 16, 17
+   Ayllu Allpa: 20 a 27
+   ========================================================== */
+const COMEDORES_POR_FUNDO = {
+  "Vivadis": [
+    "Comedor 01", "Comedor 02", "Comedor 03", "Comedor 03A",
+    "Comedor 04", "Comedor 04A", "Comedor 05", "Comedor 06",
+    "Comedor 07", "Comedor 07A", "Comedor 08", "Comedor 09"
+  ],
+  "Santa Teresa": [
+    "Comedor 09A", "Comedor 10", "Comedor 10B", "Comedor 11",
+    "Comedor 11B", "Comedor 12", "Comedor 12A", "Comedor 13",
+    "Comedor 14", "Comedor 15", "Comedor 16", "Comedor 17"
+  ],
+  "Ayllu Allpa": [
+    "Comedor 20", "Comedor 21", "Comedor 22", "Comedor 23",
+    "Comedor 24", "Comedor 25", "Comedor 26", "Comedor 27"
+  ]
+};
+
+function actualizarComedoresPorFundo(){
+  const fundo = document.getElementById("fundo_select");
+  const comedor = document.getElementById("comedor_select");
+
+  if (!fundo || !comedor) return;
+
+  const fundoSeleccionado = (fundo.value || "").trim();
+  const lista = COMEDORES_POR_FUNDO[fundoSeleccionado] || [];
+
+  comedor.innerHTML = "";
+
+  if (!lista.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Seleccione un fundo válido";
+    comedor.appendChild(opt);
+    return;
+  }
+
+  lista.forEach(nombre => {
+    const opt = document.createElement("option");
+    opt.value = nombre;
+    opt.textContent = nombre;
+    comedor.appendChild(opt);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", actualizarComedoresPorFundo);
+window.addEventListener("pageshow", actualizarComedoresPorFundo);
+setTimeout(actualizarComedoresPorFundo, 150);
 </script>
 
 </body>
@@ -3732,25 +3746,14 @@ def consumos():
         <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
         <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px 0;grid-column:1/-1"></div>
         <select id="fundo_select" name="fundo" onchange="actualizarComedoresPorFundo()" {disabled}>
-          {''.join([f'<option>{f}</option>' for f in opciones_fundo()])}
+          {''.join([f'<option value="{f}">{f}</option>' for f in opciones_fundo()])}
         </select>
         <select name="tipo" {disabled}>
           <option>Almuerzo</option>
         </select>
         <select id="comedor_select" name="comedor" {disabled}>
-<option value="Comedor 01">Comedor 01</option>
-<option value="Comedor 02">Comedor 02</option>
-<option value="Comedor 03">Comedor 03</option>
-<option value="Comedor 03A">Comedor 03A</option>
-<option value="Comedor 04">Comedor 04</option>
-<option value="Comedor 04A">Comedor 04A</option>
-<option value="Comedor 05">Comedor 05</option>
-<option value="Comedor 06">Comedor 06</option>
-<option value="Comedor 07">Comedor 07</option>
-<option value="Comedor 07A">Comedor 07A</option>
-<option value="Comedor 08">Comedor 08</option>
-<option value="Comedor 09">Comedor 09</option>
-</select>
+          <option value="">Seleccione un fundo</option>
+        </select>
         <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE (OBLIGATORIO MAYÚSCULAS)" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="6.50" {disabled}>
