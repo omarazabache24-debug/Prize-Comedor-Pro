@@ -186,6 +186,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS trabajadores (
                     id SERIAL PRIMARY KEY,
                     empresa TEXT DEFAULT 'PRIZE',
+                    planilla TEXT DEFAULT '',
                     dni TEXT UNIQUE NOT NULL,
                     nombre TEXT NOT NULL,
                     cargo TEXT DEFAULT '',
@@ -204,8 +205,8 @@ def init_db():
                     area TEXT DEFAULT '',
                     tipo TEXT DEFAULT 'Almuerzo',
                     cantidad INTEGER DEFAULT 1,
-                    precio_unitario REAL DEFAULT 10,
-                    total REAL DEFAULT 10,
+                    precio_unitario REAL DEFAULT 6.5,
+                    total REAL DEFAULT 6.5,
                     observacion TEXT DEFAULT '',
                     estado TEXT DEFAULT 'PENDIENTE',
                     creado_por TEXT DEFAULT '',
@@ -254,6 +255,7 @@ def init_db():
                 """)
                 for stmt in [
                     "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_plain TEXT DEFAULT ''",
+                    "ALTER TABLE trabajadores ADD COLUMN IF NOT EXISTS planilla TEXT DEFAULT ''",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS comedor TEXT DEFAULT 'Comedor 01'",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS fundo TEXT DEFAULT 'Kawsay Allpa'",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS responsable TEXT DEFAULT ''",
@@ -281,6 +283,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS trabajadores (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 empresa TEXT DEFAULT 'PRIZE',
+                planilla TEXT DEFAULT '',
                 dni TEXT UNIQUE NOT NULL,
                 nombre TEXT NOT NULL,
                 cargo TEXT DEFAULT '',
@@ -299,8 +302,8 @@ def init_db():
                 area TEXT DEFAULT '',
                 tipo TEXT DEFAULT 'Almuerzo',
                 cantidad INTEGER DEFAULT 1,
-                precio_unitario REAL DEFAULT 10,
-                total REAL DEFAULT 10,
+                precio_unitario REAL DEFAULT 6.5,
+                total REAL DEFAULT 6.5,
                 observacion TEXT DEFAULT '',
                 estado TEXT DEFAULT 'PENDIENTE',
                 creado_por TEXT DEFAULT '',
@@ -346,6 +349,9 @@ def init_db():
             user_cols = [x["name"] for x in conn.execute("PRAGMA table_info(usuarios)").fetchall()]
             if "password_plain" not in user_cols:
                 conn.execute("ALTER TABLE usuarios ADD COLUMN password_plain TEXT DEFAULT ''")
+            trab_cols = [x["name"] for x in conn.execute("PRAGMA table_info(trabajadores)").fetchall()]
+            if "planilla" not in trab_cols:
+                conn.execute("ALTER TABLE trabajadores ADD COLUMN planilla TEXT DEFAULT ''")
             cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
             for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0")]:
                 if col not in cols:
@@ -377,15 +383,15 @@ def init_db():
             q_exec("UPDATE usuarios SET role='admin', active=1, password_hash=?, password_plain=? WHERE username=?", (generate_password_hash(password), password, username))
 
     demos = [
-        ("PRIZE", "74324033", "AZABACHE LUJAN, OMAR EDUARDO", "OPERARIO", "PRODUCCION"),
-        ("PRIZE", "45148597", "CONCEPCION ZAVALETA, VICTOR", "OPERARIO", "PRODUCCION"),
-        ("PRIZE", "47625779", "HUAYLLA NACARINO, RAUL", "OPERARIO", "PRODUCCION"),
-        ("PRIZE", "41678684", "TANTALLEAN PINILLOS, ERNESTO", "OPERARIO", "PRODUCCION"),
-        ("PRIZE", "80503598", "LLANOS VASQUEZ, SEGUNDO", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "GENERAL", "74324033", "AZABACHE LUJAN, OMAR EDUARDO", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "GENERAL", "45148597", "CONCEPCION ZAVALETA, VICTOR", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "GENERAL", "47625779", "HUAYLLA NACARINO, RAUL", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "GENERAL", "41678684", "TANTALLEAN PINILLOS, ERNESTO", "OPERARIO", "PRODUCCION"),
+        ("PRIZE", "GENERAL", "80503598", "LLANOS VASQUEZ, SEGUNDO", "OPERARIO", "PRODUCCION"),
     ]
-    for emp, dni, nom, cargo, area in demos:
+    for emp, planilla, dni, nom, cargo, area in demos:
         if not q_one("SELECT id FROM trabajadores WHERE dni=?", (dni,)):
-            q_exec("INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)", (emp, dni, nom, cargo, area))
+            q_exec("INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,1)", (emp, planilla, dni, nom, cargo, area))
 
 
 # =========================
@@ -552,6 +558,7 @@ def col_value(row, *names):
             "NOMBRE_Y_APELLIDOS", "APELLIDOS_Y_NOMBRES_COMPLETOS"
         ],
         "EMPRESA": ["EMPRESA", "RAZON_SOCIAL", "COMPANIA", "CIA", "ORGANIZACION"],
+        "PLANILLA": ["PLANILLA", "TIPO_PLANILLA", "TIPO_DE_PLANILLA", "REGIMEN", "NOMINA"],
         "CARGO": ["CARGO", "PUESTO", "OCUPACION", "FUNCION", "LABOR", "ACTIVIDAD"],
         "AREA": ["AREA", "AREA_TRABAJO", "SEDE", "FUNDO", "UNIDAD", "DEPARTAMENTO", "CENTRO_COSTO"],
     }
@@ -573,6 +580,7 @@ def _normalizar_fila_trabajador(row):
         return None
     return {
         "empresa": (clean_text(col_value(row, "EMPRESA")) or "PRIZE").upper(),
+        "planilla": clean_text(col_value(row, "PLANILLA")).upper(),
         "dni": dni,
         "nombre": nombre,
         "cargo": clean_text(col_value(row, "CARGO")).upper(),
@@ -666,7 +674,7 @@ def reemplazar_trabajadores_batch(registros):
     """Reemplaza la tabla trabajadores en UNA sola conexión y por lotes.
     Evita abrir miles de conexiones en Render y evita SIGKILL por memoria/tiempo.
     """
-    data = [(r["empresa"], r["dni"], r["nombre"], r["cargo"], r["area"]) for r in registros]
+    data = [(r["empresa"], r.get("planilla", ""), r["dni"], r["nombre"], r["cargo"], r["area"]) for r in registros]
     if not data:
         return 0
 
@@ -677,8 +685,8 @@ def reemplazar_trabajadores_batch(registros):
                 psycopg2.extras.execute_batch(
                     cur,
                     """
-                    INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo)
-                    VALUES(%s,%s,%s,%s,%s,1)
+                    INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo)
+                    VALUES(%s,%s,%s,%s,%s,%s,1)
                     """,
                     data,
                     page_size=500,
@@ -687,7 +695,7 @@ def reemplazar_trabajadores_batch(registros):
         else:
             conn.execute("DELETE FROM trabajadores")
             conn.executemany(
-                "INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)",
+                "INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,1)",
                 data,
             )
             conn.commit()
@@ -2754,6 +2762,25 @@ th{
   }
 }
 
+
+/* ===== ENCABEZADO FIJO CONTROL DOCUMENTAL + PANEL OCULTABLE ===== */
+.mobile-doc-header{position:fixed;top:0;left:0;right:0;height:58px;background:#111820;color:#fff;display:none;align-items:center;justify-content:space-between;padding:0 18px;z-index:1000;border-bottom:1px solid rgba(255,255,255,.08);box-shadow:0 8px 22px rgba(0,0,0,.22)}
+.mobile-doc-header button{width:auto!important;min-height:0!important;background:transparent!important;border:0!important;color:#fff!important;font-size:28px!important;font-weight:900!important;padding:8px!important;box-shadow:none!important}
+.mobile-doc-header .doc-back{font-size:26px!important}.mobile-doc-header .doc-title{font-size:18px;font-weight:950;letter-spacing:.2px;text-align:center;flex:1}.mobile-doc-header .doc-menu{font-size:30px!important;line-height:1}
+body.sidebar-collapsed .fixed-prize-sidebar{transform:translateX(-105%)!important;pointer-events:none!important;opacity:0!important}
+body.sidebar-collapsed .hero,body.sidebar-collapsed .main-layout{margin-left:0!important;width:100%!important}
+body.sidebar-collapsed .main-layout{grid-template-columns:minmax(0,1fr) 310px!important}
+.fixed-prize-sidebar{transition:transform .22s ease,opacity .22s ease!important}.hero,.main-layout{transition:margin-left .22s ease,width .22s ease!important}
+@media(max-width:780px){
+  .mobile-doc-header{display:flex!important}
+  .app-shell{padding-top:58px!important}
+  .hero{display:none!important}
+  .fixed-prize-sidebar{position:fixed!important;top:58px!important;left:0!important;width:82vw!important;max-width:310px!important;height:calc(100vh - 58px)!important;z-index:999!important;overflow-y:auto!important;box-shadow:16px 0 38px rgba(0,0,0,.28)!important;transform:translateX(0)!important}
+  body.sidebar-collapsed .fixed-prize-sidebar{transform:translateX(-105%)!important;opacity:0!important}
+  .main-layout,.content{margin-left:0!important;width:100%!important;height:auto!important;overflow:visible!important}
+  .content{padding-top:12px!important}
+}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -2765,6 +2792,12 @@ th{
   {{content|safe}}
 {% else %}
 <div class="app-shell">
+
+  <div class="mobile-doc-header">
+    <button type="button" class="doc-back" onclick="history.back()">←</button>
+    <div class="doc-title">Control documental</div>
+    <button type="button" class="doc-menu" onclick="toggleSidebarPrize()">☰</button>
+  </div>
 
   <header class="hero">
     <div class="hero-title-only">
@@ -3162,6 +3195,17 @@ th{
 })();
 </script>
 
+
+<script>
+function toggleSidebarPrize(){
+  document.body.classList.toggle('sidebar-collapsed');
+  try{localStorage.setItem('sidebarPrizeCollapsed', document.body.classList.contains('sidebar-collapsed') ? '1' : '0');}catch(e){}
+}
+document.addEventListener('DOMContentLoaded', function(){
+  try{ if(localStorage.getItem('sidebarPrizeCollapsed') === '1'){ document.body.classList.add('sidebar-collapsed'); } }catch(e){}
+});
+</script>
+
 </body>
 </html>
 """
@@ -3438,7 +3482,7 @@ def consumos():
             return redirect(url_for("consumos"))
 
         tipo = request.form.get("tipo", "Almuerzo")
-        if tipo not in ["Almuerzo", "Dieta"]:
+        if tipo not in ["Almuerzo"]:
             tipo = "Almuerzo"
 
         comedor = request.form.get("comedor", "Comedor 01")
@@ -3448,9 +3492,12 @@ def consumos():
             flash("El campo RESPONSABLE es obligatorio y debe ir en MAYÚSCULAS.", "error")
             return redirect(url_for("consumos", fecha=fecha))
         cantidad = int(float(request.form.get("cantidad") or 1))
-        precio = float(request.form.get("precio_unitario") or 10)
+        precio = float(request.form.get("precio_unitario") or 6.5)
         total = cantidad * precio
-        obs = clean_text(request.form.get("observacion"))
+        obs = clean_text(request.form.get("observacion")).upper()
+        if not obs:
+            flash("La OBSERVACION es obligatoria: REGISTRAR TU GRUPO.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
         es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
 
         # REGISTRO MASIVO / EN LOTE desde la misma pestaña Consumos.
@@ -3608,15 +3655,14 @@ def consumos():
         </select>
         <select name="tipo" {disabled}>
           <option>Almuerzo</option>
-          <option>Dieta</option>
         </select>
         <select name="fundo" {disabled}>
           {''.join([f'<option>{f}</option>' for f in opciones_fundo()])}
         </select>
         <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE (OBLIGATORIO MAYÚSCULAS)" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
-        <input type="number" step="0.01" name="precio_unitario" value="10.00" {disabled}>
-        <input name="observacion" placeholder="Observación / QR DNI" {disabled}>
+        <input type="number" step="0.01" name="precio_unitario" value="6.50" {disabled}>
+        <input name="observacion" placeholder="REGISTRAR TU GRUPO" required oninput="this.value=this.value.toUpperCase()" {disabled}>
         <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" checked onchange="toggleLote()"> Registro masivo / lote</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div id="lote_panel" class="lote-dios-panel">
@@ -3790,7 +3836,7 @@ def consumos():
       const fundo = fd.get('fundo') || 'Kawsay Allpa';
       const responsable = (fd.get('responsable') || '').toString().toUpperCase();
       const cant = fd.get('cantidad') || '1';
-      const precio = parseFloat(fd.get('precio_unitario') || '10') || 0;
+      const precio = parseFloat(fd.get('precio_unitario') || '6.5') || 0;
       const total = (parseFloat(cant || '1') * precio).toFixed(2);
       const html = arr.map((d, i) => {{
         const on = checked[d] !== false;
@@ -4245,7 +4291,7 @@ def consumos():
         const form = document.getElementById('form_consumo'); const fd = new FormData(form || document.createElement('form'));
         const fecha = document.querySelector('input[name="fecha"]')?.value || new Date().toISOString().slice(0,10);
         const hora = new Date().toLocaleTimeString('es-PE',{{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});
-        const tipo = fd.get('tipo') || 'Almuerzo'; const comedor = fd.get('comedor') || 'Comedor 01'; const fundo = fd.get('fundo') || 'Kawsay Allpa'; const responsable = responsableFix() || '-'; const cant = fd.get('cantidad') || '1'; const precio = parseFloat(fd.get('precio_unitario') || '10') || 0; const total = ((parseFloat(cant || '1') || 1) * precio).toFixed(2);
+        const tipo = fd.get('tipo') || 'Almuerzo'; const comedor = fd.get('comedor') || 'Comedor 01'; const fundo = fd.get('fundo') || 'Kawsay Allpa'; const responsable = responsableFix() || '-'; const cant = fd.get('cantidad') || '1'; const precio = parseFloat(fd.get('precio_unitario') || '6.5') || 0; const total = ((parseFloat(cant || '1') || 1) * precio).toFixed(2);
         const html = loteMasivoFix.map((x,i)=>`<tr class="fila-lote-preview ${{x.checked !== false ? '' : 'unchecked'}}"><td><input class="lote-check" type="checkbox" ${{x.checked !== false ? 'checked' : ''}} onchange="toggleCheckLote('${{x.dni}}', this.checked)"></td><td>${{escHtmlFix(fecha)}}</td><td>${{escHtmlFix(hora)}}</td><td><b>${{escHtmlFix(x.dni)}}</b></td><td>${{escHtmlFix(x.nombre || 'Trabajador validado')}}</td><td>${{escHtmlFix(x.area || '-')}}</td><td>${{escHtmlFix(tipo)}}</td><td>${{escHtmlFix(comedor)}}</td><td>${{escHtmlFix(fundo)}}</td><td>${{escHtmlFix(responsable)}}</td><td>${{escHtmlFix(cant)}}</td><td>S/ ${{precio.toFixed(2)}}</td><td>S/ ${{total}}</td><td><span class="badge ${{x.checked !== false ? 'lote' : 'lote-off'}}">${{x.checked !== false ? 'LISTO PARA GUARDAR' : 'NO GUARDAR'}}</span></td><td><button type="button" onclick="quitarDniLote('${{x.dni}}')" class="btn-red" style="min-height:0;padding:7px 10px">Quitar</button></td></tr>`).join('');
         tbody.insertAdjacentHTML('afterbegin', html);
       }}
@@ -4498,14 +4544,16 @@ def api_registrar_consumo_auto():
     if not trabajador:
         return jsonify({"ok": False, "msg": f"DNI no encontrado o trabajador inactivo: {dni}"}), 404
     tipo = request.form.get("tipo", "Almuerzo")
-    if tipo not in ["Almuerzo", "Dieta"]:
+    if tipo not in ["Almuerzo"]:
         tipo = "Almuerzo"
     comedor = request.form.get("comedor", "Comedor 01")
     fundo = request.form.get("fundo", "Kawsay Allpa")
     cantidad = int(float(request.form.get("cantidad") or 1))
-    precio = float(request.form.get("precio_unitario") or 10)
+    precio = float(request.form.get("precio_unitario") or 6.5)
     total = cantidad * precio
-    obs = clean_text(request.form.get("observacion"))
+    obs = clean_text(request.form.get("observacion")).upper()
+    if not obs:
+        return jsonify({"ok": False, "msg": "La OBSERVACION es obligatoria: REGISTRAR TU GRUPO."}), 400
     es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
     if not es_adicional and q_one("SELECT id,hora FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni)):
         return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy."}), 409
@@ -4856,14 +4904,14 @@ def carga_masiva():
                 continue
 
             tipo = clean_text(r.get("TIPO")) or "Almuerzo"
-            if tipo not in ["Almuerzo", "Dieta"]:
+            if tipo not in ["Almuerzo"]:
                 tipo = "Almuerzo"
             comedor = clean_text(r.get("COMEDOR")) or "Comedor 01"
             fundo = clean_text(r.get("FUNDO")) or "Kawsay Allpa"
             responsable = clean_text(r.get("RESPONSABLE"))
             cantidad = int(float(r.get("CANTIDAD") or 1))
-            precio = float(r.get("PRECIO_UNITARIO") or r.get("PRECIO") or 10)
-            obs = clean_text(r.get("OBSERVACION"))
+            precio = float(r.get("PRECIO_UNITARIO") or r.get("PRECIO") or 6.5)
+            obs = clean_text(r.get("OBSERVACION")).upper() or "REGISTRAR TU GRUPO"
             q_exec("""
                 INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -4913,6 +4961,7 @@ def trabajadores():
         dni = clean_dni(request.form.get("dni"))
         nombre = clean_text(request.form.get("nombre"))
         empresa = clean_text(request.form.get("empresa")) or "PRIZE"
+        planilla = clean_text(request.form.get("planilla")).upper()
         cargo = clean_text(request.form.get("cargo"))
         area = clean_text(request.form.get("area"))
         if len(dni) != 8 or not nombre:
@@ -4921,11 +4970,11 @@ def trabajadores():
 
         existe = q_one("SELECT id FROM trabajadores WHERE dni=?", (dni,))
         if existe:
-            q_exec("UPDATE trabajadores SET empresa=?,nombre=?,cargo=?,area=?,activo=1,actualizado=CURRENT_TIMESTAMP WHERE dni=?",
-                   (empresa, nombre, cargo, area, dni))
+            q_exec("UPDATE trabajadores SET empresa=?,planilla=?,nombre=?,cargo=?,area=?,activo=1,actualizado=CURRENT_TIMESTAMP WHERE dni=?",
+                   (empresa, planilla, nombre, cargo, area, dni))
         else:
-            q_exec("INSERT INTO trabajadores(empresa,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,1)",
-                   (empresa, dni, nombre, cargo, area))
+            q_exec("INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,1)",
+                   (empresa, planilla, dni, nombre, cargo, area))
         flash("Trabajador guardado correctamente.", "ok")
         return redirect(url_for("trabajadores"))
 
@@ -4968,16 +5017,16 @@ def trabajadores():
         b = f"%{buscar}%"
         rows = q_all("""
             SELECT * FROM trabajadores
-            WHERE dni LIKE ? OR nombre LIKE ? OR cargo LIKE ? OR area LIKE ? OR empresa LIKE ?
+            WHERE dni LIKE ? OR nombre LIKE ? OR cargo LIKE ? OR area LIKE ? OR empresa LIKE ? OR planilla LIKE ?
             ORDER BY nombre
-        """, (b, b, b, b, b))
+        """, (b, b, b, b, b, b))
     else:
         rows = q_all("SELECT * FROM trabajadores ORDER BY nombre")
 
     tabla = "".join([
-        f"<tr><td>{r['empresa']}</td><td>{r['dni']}</td><td>{r['nombre']}</td><td>{r['cargo']}</td><td>{r['area']}</td><td><span class='badge ok'>Activo</span></td></tr>"
+        f"<tr><td>{r['empresa']}</td><td>{r['planilla'] or '-'}</td><td>{r['dni']}</td><td>{r['nombre']}</td><td>{r['cargo']}</td><td>{r['area']}</td><td><span class='badge ok'>Activo</span></td></tr>"
         for r in rows
-    ]) or "<tr><td colspan='6'>Sin trabajadores encontrados.</td></tr>"
+    ]) or "<tr><td colspan='7'>Sin trabajadores encontrados.</td></tr>"
 
     html = topbar("Trabajadores", "Base de trabajadores activos para validar DNI") + f"""
     <div class="kpi-grid" style="grid-template-columns:repeat(3,minmax(180px,1fr))!important">
@@ -5012,6 +5061,7 @@ def trabajadores():
       <form method="post" class="form-grid" id="form_consumo" onsubmit="return validarAntesEnviar(event)">
         <input type="hidden" name="manual" value="1">
         <input name="empresa" value="PRIZE" placeholder="Empresa">
+        <input name="planilla" placeholder="Planilla">
         <input name="dni" placeholder="DNI" required>
         <input name="nombre" placeholder="Apellidos y nombres" required>
         <input name="cargo" placeholder="Cargo">
@@ -5045,7 +5095,7 @@ def trabajadores():
 
       <div class="table-wrap">
         <table>
-          <tr><th>Empresa</th><th>DNI</th><th>Nombre</th><th>Cargo</th><th>Área</th><th>Estado</th></tr>
+          <tr><th>Empresa</th><th>Planilla</th><th>DNI</th><th>Nombre</th><th>Cargo</th><th>Área</th><th>Estado</th></tr>
           {tabla}
         </table>
       </div>
@@ -5410,14 +5460,15 @@ def eliminar_usuario(username):
 def plantilla_consumos():
     df = pd.DataFrame([{
         "FECHA": hoy_iso(),
+        "PLANILLA": "GENERAL",
         "DNI": "74324033",
         "COMEDOR": "Comedor 01",
         "TIPO": "Almuerzo",
         "FUNDO": "Kawsay Allpa",
         "RESPONSABLE": "Nombre responsable",
         "CANTIDAD": 1,
-        "PRECIO_UNITARIO": 10,
-        "OBSERVACION": "Pedido desde Forms / QR DNI"
+        "PRECIO_UNITARIO": 6.5,
+        "OBSERVACION": "REGISTRAR TU GRUPO"
     }])
     output = BytesIO()
     df.to_excel(output, index=False)
@@ -5431,6 +5482,7 @@ def plantilla_consumos():
 def plantilla_trabajadores():
     df = pd.DataFrame([{
         "EMPRESA": "PRIZE",
+        "PLANILLA": "GENERAL",
         "DNI": "74324033",
         "NOMBRE": "AZABACHE LUJAN, OMAR EDUARDO",
         "CARGO": "OPERARIO",
