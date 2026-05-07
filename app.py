@@ -2798,7 +2798,7 @@ body.sidebar-collapsed .content{width:100%!important;max-width:none!important}
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous">
 const COMEDORES_POR_FUNDO = {
-  "Vividis": [
+  "Vivadis": [
     "Comedor 01","Comedor 02","Comedor 03","Comedor 03A",
     "Comedor 04","Comedor 04A","Comedor 05","Comedor 06",
     "Comedor 07","Comedor 07A","Comedor 08","Comedor 09"
@@ -2819,7 +2819,9 @@ function actualizarComedoresPorFundo(){
     const comedor = document.getElementById("comedor_select");
     if(!fundo || !comedor) return;
 
-    const seleccion = fundo.value || "Vividis";
+    
+    const seleccion = fundo.value || "Vivadis";
+        
     const lista = COMEDORES_POR_FUNDO[seleccion] || [];
 
     comedor.innerHTML = "";
@@ -2831,6 +2833,13 @@ function actualizarComedoresPorFundo(){
         comedor.appendChild(opt);
     });
 }
+
+
+setTimeout(function(){
+    if(document.getElementById("fundo_select")){
+        actualizarComedoresPorFundo();
+    }
+}, 500);
 
 document.addEventListener("DOMContentLoaded", function(){
     actualizarComedoresPorFundo();
@@ -3728,7 +3737,20 @@ def consumos():
         <select name="tipo" {disabled}>
           <option>Almuerzo</option>
         </select>
-        <select id="comedor_select" name="comedor" {disabled}></select>
+        <select id="comedor_select" name="comedor" {disabled}>
+<option value="Comedor 01">Comedor 01</option>
+<option value="Comedor 02">Comedor 02</option>
+<option value="Comedor 03">Comedor 03</option>
+<option value="Comedor 03A">Comedor 03A</option>
+<option value="Comedor 04">Comedor 04</option>
+<option value="Comedor 04A">Comedor 04A</option>
+<option value="Comedor 05">Comedor 05</option>
+<option value="Comedor 06">Comedor 06</option>
+<option value="Comedor 07">Comedor 07</option>
+<option value="Comedor 07A">Comedor 07A</option>
+<option value="Comedor 08">Comedor 08</option>
+<option value="Comedor 09">Comedor 09</option>
+</select>
         <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE (OBLIGATORIO MAYÚSCULAS)" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
         <input type="number" name="cantidad" min="1" value="1" {disabled}>
         <input type="number" step="0.01" name="precio_unitario" value="6.50" {disabled}>
