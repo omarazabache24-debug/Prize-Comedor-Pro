@@ -260,6 +260,7 @@ def init_db():
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS fundo TEXT DEFAULT 'Kawsay Allpa'",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS responsable TEXT DEFAULT ''",
                     "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS adicional INTEGER DEFAULT 0",
+                    "ALTER TABLE consumos ADD COLUMN IF NOT EXISTS modo_prueba INTEGER DEFAULT 0",
                 ]:
                     cur.execute(stmt)
                 cur.execute("""
@@ -353,7 +354,7 @@ def init_db():
             if "planilla" not in trab_cols:
                 conn.execute("ALTER TABLE trabajadores ADD COLUMN planilla TEXT DEFAULT ''")
             cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
-            for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0")]:
+            for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0"), ("modo_prueba", "INTEGER", "0")]:
                 if col not in cols:
                     conn.execute(f"ALTER TABLE consumos ADD COLUMN {col} {sqltype} DEFAULT {default}")
             try:
@@ -370,7 +371,7 @@ def init_db():
                 pass
             conn.commit()
 
-    defaults = {"bloqueo_activo": "0", "hora_inicio": "00:00", "hora_fin": "23:59", "clave_quitar": "1234"}
+    defaults = {"bloqueo_activo": "0", "hora_inicio": "00:00", "hora_fin": "23:59", "clave_quitar": "1234", "modo_prueba": "0"}
     for k, v in defaults.items():
         if not q_one("SELECT clave FROM configuracion WHERE clave=?", (k,)):
             q_exec("INSERT INTO configuracion(clave,valor) VALUES(?,?)", (k, v))
@@ -2781,6 +2782,19 @@ body.sidebar-collapsed .main-layout{grid-template-columns:minmax(0,1fr) 310px!im
   .content{padding-top:12px!important}
 }
 
+
+/* ===== FIX FINAL: BOTÓN OCULTAR/MOSTRAR PANEL + LIENZO EXPANDIBLE ===== */
+.sidebar-toggle-floating{position:fixed;top:70px;left:calc(var(--side-w) - 18px);z-index:1200;width:38px!important;height:38px!important;min-height:38px!important;border-radius:999px!important;border:1px solid rgba(255,255,255,.22)!important;background:linear-gradient(135deg,#0ea5e9,#16a34a)!important;color:#fff!important;font-size:18px!important;font-weight:950!important;display:flex!important;align-items:center!important;justify-content:center!important;box-shadow:0 10px 25px rgba(0,0,0,.28)!important;cursor:pointer!important;transition:left .22s ease, transform .18s ease!important}
+.sidebar-toggle-floating:hover{transform:scale(1.06)!important}
+body.sidebar-collapsed .sidebar-toggle-floating{left:10px!important}
+body.sidebar-collapsed .sidebar-toggle-floating::after{content:'☰'}
+body:not(.sidebar-collapsed) .sidebar-toggle-floating::after{content:'‹'}
+body.sidebar-collapsed .content{width:100%!important;max-width:none!important}
+@media(min-width:781px){body.sidebar-collapsed .main-layout{margin-left:0!important;grid-template-columns:minmax(0,1fr) 310px!important;width:100%!important}.sidebar-mini-toggle{display:none!important}}
+.sidebar-mini-toggle{position:sticky;top:0;z-index:2;margin:-4px 0 10px 0;width:100%!important;min-height:38px!important;border-radius:14px!important;background:rgba(255,255,255,.08)!important;color:#fff!important;border:1px solid rgba(255,255,255,.14)!important;font-weight:950!important}
+@media(max-width:780px){.sidebar-toggle-floating{display:none!important}.sidebar-mini-toggle{display:block!important}}
+.modo-prueba-box{margin-top:12px;padding:12px;border-radius:18px;background:rgba(250,204,21,.10);border:1px solid rgba(250,204,21,.35);color:#fff}.modo-prueba-box b{color:#fde68a}.modo-prueba-box form{display:grid;gap:8px;margin-top:8px}.modo-prueba-box button{min-height:38px!important;border-radius:13px!important;font-size:12px!important;font-weight:950!important}
+
 </style>
 <script src="https://unpkg.com/html5-qrcode.3.8/html5-qrcode.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js" crossorigin="anonymous"></script>
@@ -2792,6 +2806,7 @@ body.sidebar-collapsed .main-layout{grid-template-columns:minmax(0,1fr) 310px!im
   {{content|safe}}
 {% else %}
 <div class="app-shell">
+  <button type="button" class="sidebar-toggle-floating" onclick="toggleSidebarPrize()" title="Ocultar / mostrar panel"></button>
 
   <div class="mobile-doc-header">
     <button type="button" class="doc-back" onclick="history.back()">←</button>
@@ -2809,6 +2824,7 @@ body.sidebar-collapsed .main-layout{grid-template-columns:minmax(0,1fr) 310px!im
 
 <div class="main-layout">
     <aside class="sidebar fixed-prize-sidebar">
+      <button type="button" class="sidebar-mini-toggle" onclick="toggleSidebarPrize()">☰ Ocultar / mostrar panel</button>
       <div class="side-logo-pro">
         <div class="prize-wordmark prize-wordmark-side"><div class="prize-script">Prize<span class="prize-e">e<i></i></span></div><div class="prize-super">SUPERFRUITS</div></div>
       </div>
@@ -2838,6 +2854,19 @@ body.sidebar-collapsed .main-layout{grid-template-columns:minmax(0,1fr) 310px!im
         {% endif %}
         <a class="logout-link" href="{{url_for('logout')}}"><span class="nav-ico">🚪</span>Salir</a>
       </nav>
+
+
+      {% if session.get('role') == 'admin' %}
+      <div class="modo-prueba-box">
+        <b>🧪 Modo prueba: {{'ACTIVO' if modo_prueba_activo else 'APAGADO'}}</b>
+        <form method="post" action="{{url_for('toggle_modo_prueba')}}">
+          <button class="{{'btn-red' if modo_prueba_activo else 'btn-green'}}">{{'DESACTIVAR PRUEBA' if modo_prueba_activo else 'ACTIVAR PRUEBA'}}</button>
+        </form>
+        <form method="post" action="{{url_for('limpiar_modo_prueba')}}" onsubmit="return confirm('Se eliminarán todos los consumos registrados en MODO PRUEBA. ¿Continuar?')">
+          <button class="btn-orange">🧹 LIMPIAR PRUEBA</button>
+        </form>
+      </div>
+      {% endif %}
 
       <div class="side-slogan-card">
         <div class="leaf-icon"></div>
@@ -3499,6 +3528,9 @@ def consumos():
             flash("La OBSERVACION es obligatoria: REGISTRAR TU GRUPO.", "error")
             return redirect(url_for("consumos", fecha=fecha))
         es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
+        modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
+        if modo_prueba and "[MODO PRUEBA]" not in obs:
+            obs = ("[MODO PRUEBA] " + (obs or "REGISTRAR TU GRUPO")).upper()
 
         # REGISTRO MASIVO / EN LOTE desde la misma pestaña Consumos.
         if request.form.get("modo_lote") == "1":
@@ -3524,9 +3556,9 @@ def consumos():
                     continue
                 try:
                     q_exec("""
-                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"]))
+                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
                     creados += 1
                 except Exception as e:
                     errores.append(f"{dni}: no se pudo registrar")
@@ -3553,9 +3585,9 @@ def consumos():
 
         try:
             q_exec("""
-                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"]))
+                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
         except Exception:
             flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}.", "error")
             return redirect(url_for("consumos"))
@@ -4555,14 +4587,17 @@ def api_registrar_consumo_auto():
     if not obs:
         return jsonify({"ok": False, "msg": "La OBSERVACION es obligatoria: REGISTRAR TU GRUPO."}), 400
     es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
+    modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
+    if modo_prueba and "[MODO PRUEBA]" not in obs:
+        obs = ("[MODO PRUEBA] " + (obs or "REGISTRAR TU GRUPO")).upper()
     if not es_adicional and q_one("SELECT id,hora FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni)):
         return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy."}), 409
     hora = hora_now()
     try:
         new_id = q_exec("""
-            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"]))
+            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
     except Exception:
         return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}."}), 409
     if new_id:
@@ -4912,10 +4947,13 @@ def carga_masiva():
             cantidad = int(float(r.get("CANTIDAD") or 1))
             precio = float(r.get("PRECIO_UNITARIO") or r.get("PRECIO") or 6.5)
             obs = clean_text(r.get("OBSERVACION")).upper() or "REGISTRAR TU GRUPO"
+            modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
+            if modo_prueba and "[MODO PRUEBA]" not in obs:
+                obs = ("[MODO PRUEBA] " + obs).upper()
             q_exec("""
-                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, cantidad*precio, obs, comedor, fundo, responsable, 0, "PENDIENTE", session["user"]))
+                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, cantidad*precio, obs, comedor, fundo, responsable, 0, "PENDIENTE", session["user"], modo_prueba))
             creados += 1
 
         q_exec("INSERT INTO importaciones(archivo,total,creados,errores,usuario) VALUES(?,?,?,?,?)",
@@ -5280,6 +5318,32 @@ def reportes():
     return render_page(html, "reportes")
 
 
+
+@app.route("/modo-prueba/toggle", methods=["POST"])
+@login_required
+@roles_required("admin")
+def toggle_modo_prueba():
+    nuevo = "0" if cfg_get("modo_prueba", "0") == "1" else "1"
+    cfg_set("modo_prueba", nuevo)
+    audit_event("MODO_PRUEBA", "configuracion", "modo_prueba", "ACTIVO" if nuevo == "1" else "APAGADO")
+    flash("Modo prueba ACTIVADO. Todo consumo nuevo quedará marcado como prueba." if nuevo == "1" else "Modo prueba DESACTIVADO.", "ok")
+    return redirect(request.referrer or url_for("dashboard"))
+
+
+@app.route("/modo-prueba/limpiar", methods=["POST"])
+@login_required
+@roles_required("admin")
+def limpiar_modo_prueba():
+    try:
+        total_row = q_one("SELECT COUNT(*) c FROM consumos WHERE COALESCE(modo_prueba,0)=1 OR UPPER(COALESCE(observacion,'')) LIKE '%[MODO PRUEBA]%' ")
+        total = total_row["c"] if total_row else 0
+        q_exec("DELETE FROM consumos WHERE COALESCE(modo_prueba,0)=1 OR UPPER(COALESCE(observacion,'')) LIKE '%[MODO PRUEBA]%' ")
+        audit_event("LIMPIAR_MODO_PRUEBA", "consumos", "", f"Eliminados: {total}")
+        flash(f"Limpieza de prueba terminada: {total} registro(s) eliminado(s).", "ok")
+    except Exception as e:
+        flash(f"No se pudo limpiar modo prueba: {e}", "error")
+    return redirect(request.referrer or url_for("dashboard"))
+
 @app.route("/configuracion", methods=["GET", "POST"])
 @login_required
 @roles_required("admin")
@@ -5309,6 +5373,16 @@ def configuracion():
         <button>Guardar configuración</button>
       </form>
       <p class="muted small">Con bloqueo activo, los usuarios registran solo dentro del horario. Admin puede registrar adicionales.</p>
+    </div>
+
+    <br>
+    <div class="card">
+      <h3 style="margin-top:0">🧪 Modo prueba administrador</h3>
+      <p class="muted small">Activa prueba para registrar con admin o usuario. Luego usa LIMPIAR PRUEBA y se borran solo los registros marcados como prueba.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <form method="post" action="{url_for('toggle_modo_prueba')}"><button class="{'btn-red' if cfg_get('modo_prueba','0')=='1' else 'btn-green'}">{'DESACTIVAR PRUEBA' if cfg_get('modo_prueba','0')=='1' else 'ACTIVAR PRUEBA'}</button></form>
+        <form method="post" action="{url_for('limpiar_modo_prueba')}" onsubmit="return confirm('Se eliminarán los registros de modo prueba. ¿Continuar?')"><button class="btn-orange">LIMPIAR PRUEBA</button></form>
+      </div>
     </div>
 
     <br>
