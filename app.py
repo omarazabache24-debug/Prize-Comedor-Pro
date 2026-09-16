@@ -200,6 +200,14 @@ def init_db():
             correo_destino TEXT DEFAULT '',
             correo_estado TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS dias_operativos (
+            fecha TEXT PRIMARY KEY,
+            estado TEXT NOT NULL DEFAULT 'ABIERTO',
+            abierto_por TEXT DEFAULT '',
+            abierto_en TEXT DEFAULT CURRENT_TIMESTAMP,
+            cerrado_por TEXT DEFAULT '',
+            cerrado_en TEXT DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS importaciones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -250,16 +258,37 @@ def init_db():
         elif username in ("adm", "adm1", "adm2"):
             q_exec("UPDATE usuarios SET role='admin', active=1, password_hash=?, password_plain=? WHERE username=?", (generate_password_hash(password), password, username))
 
-    demos = [
-        ("APB SAC", "GENERAL", "74324033", "AZABACHE LUJAN, OMAR EDUARDO", "OPERARIO", "PRODUCCION"),
-        ("APB SAC", "GENERAL", "45148597", "CONCEPCION ZAVALETA, VICTOR", "OPERARIO", "PRODUCCION"),
-        ("APB SAC", "GENERAL", "47625779", "HUAYLLA NACARINO, RAUL", "OPERARIO", "PRODUCCION"),
-        ("APB SAC", "GENERAL", "41678684", "TANTALLEAN PINILLOS, ERNESTO", "OPERARIO", "PRODUCCION"),
-        ("APB SAC", "GENERAL", "80503598", "LLANOS VASQUEZ, SEGUNDO", "OPERARIO", "PRODUCCION"),
-    ]
-    for emp, planilla, dni, nom, cargo, area in demos:
-        if not q_one("SELECT id FROM trabajadores WHERE dni=?", (dni,)):
-            q_exec("INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,1)", (emp, planilla, dni, nom, cargo, area))
+    # Desde esta versión NO se precargan trabajadores de demostración.
+    # Limpieza única de los 5 registros demo de versiones anteriores, sin tocar
+    # una base real que el usuario haya cargado posteriormente.
+    if not q_one("SELECT clave FROM configuracion WHERE clave='demo_trabajadores_limpiados_v4'"):
+        demo_rows = [
+            ("74324033", "AZABACHE LUJAN, OMAR EDUARDO"),
+            ("45148597", "CONCEPCION ZAVALETA, VICTOR"),
+            ("47625779", "HUAYLLA NACARINO, RAUL"),
+            ("41678684", "TANTALLEAN PINILLOS, ERNESTO"),
+            ("80503598", "LLANOS VASQUEZ, SEGUNDO"),
+        ]
+        with get_conn() as conn:
+            for dni_demo, nombre_demo in demo_rows:
+                conn.execute("DELETE FROM trabajadores WHERE dni=? AND UPPER(TRIM(nombre))=?", (dni_demo, nombre_demo))
+            conn.execute("INSERT OR REPLACE INTO configuracion(clave,valor) VALUES('demo_trabajadores_limpiados_v4','1')")
+            conn.commit()
+
+    # Migra cierres ya existentes al nuevo control de días operativos.
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO dias_operativos(fecha,estado,abierto_por,abierto_en,cerrado_por,cerrado_en)
+            SELECT fecha,'CERRADO','',cerrado_en,cerrado_por,cerrado_en FROM cierres
+        """)
+        conn.execute("""
+            UPDATE dias_operativos
+            SET estado='CERRADO',
+                cerrado_por=COALESCE((SELECT c.cerrado_por FROM cierres c WHERE c.fecha=dias_operativos.fecha),cerrado_por),
+                cerrado_en=COALESCE((SELECT c.cerrado_en FROM cierres c WHERE c.fecha=dias_operativos.fecha),cerrado_en)
+            WHERE fecha IN (SELECT fecha FROM cierres)
+        """)
+        conn.commit()
 
 
 # =========================
@@ -555,8 +584,94 @@ def reemplazar_trabajadores_batch(registros):
     return len(data)
 
 
+def validar_fecha_iso(valor, fallback=None):
+    valor = clean_text(valor)
+    if not valor:
+        return fallback or hoy_iso()
+    try:
+        return datetime.strptime(valor, "%Y-%m-%d").date().isoformat()
+    except Exception:
+        return fallback or hoy_iso()
+
+
 def dia_cerrado(fecha_iso=None):
-    return q_one("SELECT * FROM cierres WHERE fecha=?", (fecha_iso or hoy_iso(),))
+    fecha_iso = validar_fecha_iso(fecha_iso, hoy_iso())
+    return q_one("SELECT * FROM cierres WHERE fecha=?", (fecha_iso,))
+
+
+def estado_dia(fecha_iso=None, auto_abrir_hoy=True):
+    """Devuelve ABIERTO, CERRADO o NO_ABIERTO.
+
+    Regla operativa:
+    - Un cierre existente siempre manda y deja el día CERRADO.
+    - El día de hoy se abre automáticamente si nunca fue gestionado.
+    - Una fecha futura o pasada NO queda abierta por defecto: el administrador
+      debe abrirla explícitamente desde Cerrar día.
+    """
+    fecha = validar_fecha_iso(fecha_iso, hoy_iso())
+    if dia_cerrado(fecha):
+        return "CERRADO"
+    row = q_one("SELECT estado FROM dias_operativos WHERE fecha=?", (fecha,))
+    if row:
+        estado = clean_text(row["estado"]).upper()
+        return estado if estado in ("ABIERTO", "CERRADO") else "NO_ABIERTO"
+    if auto_abrir_hoy and fecha == hoy_iso():
+        q_exec("""
+            INSERT OR IGNORE INTO dias_operativos(fecha,estado,abierto_por,abierto_en)
+            VALUES(?,?,?,?)
+        """, (fecha, "ABIERTO", "SISTEMA", now_app().strftime("%Y-%m-%d %H:%M:%S")))
+        return "ABIERTO"
+    return "NO_ABIERTO"
+
+
+def dia_abierto(fecha_iso=None):
+    return estado_dia(fecha_iso) == "ABIERTO"
+
+
+def abrir_dia_operativo(fecha_iso, usuario=None, reabrir=True):
+    fecha = validar_fecha_iso(fecha_iso, hoy_iso())
+    usuario = clean_text(usuario) or session.get("user", "admin") or "admin"
+    if reabrir:
+        q_exec("DELETE FROM cierres WHERE fecha=?", (fecha,))
+    q_exec("""
+        INSERT INTO dias_operativos(fecha,estado,abierto_por,abierto_en,cerrado_por,cerrado_en)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(fecha) DO UPDATE SET
+          estado='ABIERTO', abierto_por=excluded.abierto_por, abierto_en=excluded.abierto_en,
+          cerrado_por='', cerrado_en=''
+    """, (fecha, "ABIERTO", usuario, now_app().strftime("%Y-%m-%d %H:%M:%S"), "", ""))
+    audit_event("ABRIR_DIA", "dias_operativos", fecha, f"Fecha {fecha}")
+    return fecha
+
+
+def marcar_dia_cerrado(fecha_iso, usuario=None):
+    fecha = validar_fecha_iso(fecha_iso, hoy_iso())
+    usuario = clean_text(usuario) or session.get("user", "admin") or "admin"
+    ahora = now_app().strftime("%Y-%m-%d %H:%M:%S")
+    q_exec("""
+        INSERT INTO dias_operativos(fecha,estado,abierto_por,abierto_en,cerrado_por,cerrado_en)
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(fecha) DO UPDATE SET
+          estado='CERRADO', cerrado_por=excluded.cerrado_por, cerrado_en=excluded.cerrado_en
+    """, (fecha, "CERRADO", usuario, ahora, usuario, ahora))
+    audit_event("CERRAR_DIA", "dias_operativos", fecha, f"Fecha {fecha}")
+    return fecha
+
+
+def info_dia(fecha_iso=None):
+    fecha = validar_fecha_iso(fecha_iso, hoy_iso())
+    estado = estado_dia(fecha)
+    row = q_one("SELECT * FROM dias_operativos WHERE fecha=?", (fecha,))
+    return {
+        "fecha": fecha,
+        "estado": estado,
+        "abierto": estado == "ABIERTO",
+        "cerrado": estado == "CERRADO",
+        "abierto_por": row["abierto_por"] if row else "",
+        "abierto_en": row["abierto_en"] if row else "",
+        "cerrado_por": row["cerrado_por"] if row else "",
+        "cerrado_en": row["cerrado_en"] if row else "",
+    }
 
 
 def login_required(fn):
@@ -2975,7 +3090,7 @@ html,body{max-width:100%;}
     <a class="{{'on' if page=='entregas'}}" href="{{url_for('entregas')}}">🚚 Entregas</a>
     {% if session.get('role') == 'admin' %}
     <a class="{{'on' if page=='reportes'}}" href="{{url_for('reportes')}}">📁 Reportes</a>
-    <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}">🔒 Cerrar día</a>
+    <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}">📅 Días / Cierre</a>
     <a class="{{'on' if page=='carga'}}" href="{{url_for('carga_masiva')}}">📥 Carga</a>
     <a class="{{'on' if page=='config'}}" href="{{url_for('configuracion')}}">⚙️ Config.</a>
     {% endif %}
@@ -3017,7 +3132,7 @@ html,body{max-width:100%;}
         <a class="{{'on' if page=='reportes'}}" href="{{url_for('reportes')}}"><span class="nav-ico">📁</span>Reportes <span class="pill correo">CORREO</span></a>
         {% endif %}
         {% if session.get('role') == 'admin' %}
-        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📁</span>Cerrar día</a>
+        <a class="{{'on' if page=='cierre'}}" href="{{url_for('cierre_dia')}}"><span class="nav-ico">📅</span>Días / Cierre</a>
         <a class="{{'on' if page=='carga'}}" href="{{url_for('carga_masiva')}}"><span class="nav-ico">📥</span>Carga Masiva</a>
         <a class="{{'on' if page=='config'}}" href="{{url_for('configuracion')}}"><span class="nav-ico">⚙️</span>Config. / Usuarios</a>
         {% endif %}
@@ -3046,7 +3161,7 @@ html,body{max-width:100%;}
     <main class="content">
       {% with messages=get_flashed_messages(with_categories=true) %}
         {% for c,m in messages %}
-          <div class="flash {{c}}">{{m}}</div>
+          <div class="flash {{c}} server-flash" role="alert">{{m}}</div>
         {% endfor %}
       {% endwith %}
       {{content|safe}}
@@ -3056,12 +3171,12 @@ html,body{max-width:100%;}
       <div class="card status-box">
         <h3 style="margin-top:0">Estado del día</h3>
         <div class="status-inner">
-          <span class="badge {{'off' if cerrado_hoy else 'ok'}}">🟢 {{'DÍA CERRADO' if cerrado_hoy else 'DÍA ABIERTO'}}</span>
+          <span class="badge {{'ok' if abierto_hoy else 'off'}}">{{'🟢 DÍA ABIERTO' if abierto_hoy else ('🔴 DÍA CERRADO' if cerrado_hoy else '⚪ DÍA NO ABIERTO')}}</span>
           <p class="small" style="line-height:1.7">
             <b>Fecha:</b> {{fecha_hoy}}<br>
-            <b>{{'Cerrado' if cerrado_hoy else 'Abierto'}} por:</b> admin (08:00 AM)
+            <b>Estado:</b> {{estado_hoy.replace('_',' ')}}
           </p>
-          <div class="muted small" style="margin-top:10px">Para cerrar o reabrir el día, usa la pestaña <b>Cerrar día</b>.</div>
+          <div class="muted small" style="margin-top:10px">La apertura y cierre son dinámicos. Puedes preparar otra fecha desde <b>Cerrar día</b>.</div>
         </div>
       </div>
 
@@ -3083,6 +3198,70 @@ html,body{max-width:100%;}
   </footer>
 </div>
 {% endif %}
+<style>
+/* ===== ALERTAS APB: visibles en escritorio y celular ===== */
+.prize-toast-msg,.server-flash{
+  max-width:min(680px,calc(100vw - 20px))!important;
+  box-sizing:border-box!important;
+  white-space:normal!important;
+  overflow-wrap:anywhere!important;
+  line-height:1.35!important;
+}
+@media(max-width:780px){
+  .prize-toast-msg{
+    left:10px!important;right:10px!important;width:auto!important;
+    min-height:58px!important;padding:15px 16px!important;
+    font-size:15px!important;border-radius:15px!important;
+    display:flex!important;align-items:center!important;justify-content:center!important;
+  }
+  .server-flash{
+    position:sticky!important;top:66px!important;z-index:2147483000!important;
+    margin:8px 0 12px!important;padding:15px 16px!important;
+    font-size:14.5px!important;box-shadow:0 12px 28px rgba(0,0,0,.22)!important;
+  }
+  .cierre-grid-dinamico{grid-template-columns:1fr!important;}
+}
+</style>
+<script>
+// Sonidos generados por el navegador: no dependen de archivos mp3 externos.
+window.apbPlaySound = function(ok=true){
+  try{
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if(!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(ok ? 0.12 : 0.16, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + (ok ? 0.34 : 0.62));
+    const tones = ok ? [880,1175] : [235,175,235];
+    tones.forEach((freq,i)=>{
+      const osc = ctx.createOscillator();
+      osc.type = ok ? 'sine' : 'square';
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      const st = now + i*(ok ? 0.12 : 0.16);
+      osc.start(st);
+      osc.stop(st + (ok ? 0.13 : 0.18));
+    });
+    setTimeout(()=>{try{ctx.close();}catch(e){}}, ok ? 500 : 900);
+    if(navigator.vibrate) navigator.vibrate(ok ? [90] : [150,90,180]);
+  }catch(e){}
+};
+window.apbToastDuration = function(ok){ return ok ? 5200 : 7600; };
+
+document.addEventListener('DOMContentLoaded', function(){
+  const flashes = Array.from(document.querySelectorAll('.server-flash'));
+  flashes.forEach((el,idx)=>{
+    const ok = el.classList.contains('ok');
+    // El sonido de un flash puede estar bloqueado por autoplay; los registros AJAX sí suenan.
+    if(idx===0) setTimeout(()=>window.apbPlaySound(ok),120);
+    const ms = ok ? 6000 : 8500;
+    setTimeout(()=>{ el.style.transition='opacity .35s ease,transform .35s ease'; el.style.opacity='0'; el.style.transform='translateY(-6px)'; setTimeout(()=>el.remove(),380); }, ms);
+  });
+});
+</script>
 <script>
 // ===== PRO TOTAL: DNI automático + cámara QR/BARRAS para CONSUMOS =====
 (function(){
@@ -3109,8 +3288,7 @@ html,body{max-width:100%;}
     const visibles = document.querySelectorAll('.prize-toast-msg').length;
     const topPx = 12 + (visibles * 58);
     d.style.cssText = 'position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + '+topPx+'px);z-index:2147483647;padding:12px 14px;border-radius:12px;font-weight:950;color:white;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35);background:'+(ok?'#006b1e':'#a40000')+';border:1px solid rgba(255,255,255,.18);font-size:13px;line-height:1.2;pointer-events:none;';
-    document.body.appendChild(d); setTimeout(()=>d.remove(), 2300);
-    try{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); }catch(e){}
+    document.body.appendChild(d); try{ if(!ok || /GUARD|REGISTR|ENTREG|CORRECT/i.test(String(msg||''))) window.apbPlaySound(ok); }catch(e){} setTimeout(()=>d.remove(), window.apbToastDuration ? window.apbToastDuration(ok) : (ok?5200:7600));
   }
   function beep(){
     try{
@@ -3129,7 +3307,7 @@ html,body{max-width:100%;}
         info.style.display='block';
         info.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(data.nombre||'-')+'</div><div><b>DNI</b><br>'+dni+'</div><div><b>Área</b><br>'+(data.area||'-')+'</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>';
       }
-      beep(); return true;
+      return true;
     } else {
       if(nombre){ nombre.value = 'DNI no encontrado'; nombre.title = 'DNI no encontrado'; }
       if(info){ info.style.display='block'; info.innerHTML='<span style="color:#991b1b">DNI no encontrado en Trabajadores: '+dni+'</span>'; }
@@ -3224,7 +3402,6 @@ html,body{max-width:100%;}
     const inp = document.getElementById('dni_consumo') || document.querySelector('input[name="dni"]');
     if(inp) inp.value = dni;
     await buscarAutoDniConsumo(true);
-    toast('DNI leído: ' + dni, true);
     setTimeout(()=>{proBusy=false;}, 900);
   }
   window.abrirScannerQR = async function(){
@@ -3316,7 +3493,8 @@ html,body{max-width:100%;}
       const topPx = 12 + (visibles * 58);
       div.style.cssText = 'position:fixed;left:10px;right:10px;top:calc(env(safe-area-inset-top,0px) + '+topPx+'px);z-index:2147483647;padding:12px 14px;border-radius:12px;font-weight:950;color:white;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35);background:'+(ok?'#006b1e':'#a40000')+';border:1px solid rgba(255,255,255,.18);font-size:13px;line-height:1.2;pointer-events:none;';
       document.body.appendChild(div);
-      setTimeout(()=>div.remove(), 2300);
+      try{ if(!ok || /GUARD|REGISTR|ENTREG|CORRECT/i.test(String(msg||''))) window.apbPlaySound(ok); }catch(e){}
+      setTimeout(()=>div.remove(), window.apbToastDuration ? window.apbToastDuration(ok) : (ok?5200:7600));
     }catch(e){ alert(msg); }
   }
   window.avisoMovil = premioAviso;
@@ -3478,12 +3656,15 @@ def render_page(content, page=""):
         "SELECT COUNT(*) c FROM consumos WHERE fecha=? AND estado='PENDIENTE'",
         (hoy_iso(),)
     )["c"]
+    info_hoy = info_dia(hoy_iso())
     return render_template_string(
         BASE_HTML,
         content=content,
         page=page,
         pendientes_count=pendientes_count,
-        cerrado_hoy=bool(dia_cerrado()),
+        cerrado_hoy=info_hoy["cerrado"],
+        abierto_hoy=info_hoy["abierto"],
+        estado_hoy=info_hoy["estado"],
         fecha_hoy=fecha_peru_txt(),
         money=money,
     )
@@ -3550,28 +3731,32 @@ def asegurar_archivo_cierre(fecha=None):
 @login_required
 @roles_required("admin")
 def cerrar_dia_manual():
-    fecha = hoy_iso()
+    fecha = validar_fecha_iso(request.args.get("fecha") or request.form.get("fecha"), hoy_iso())
     if dia_cerrado(fecha):
-        # Si estaba cerrado manualmente sin archivo, lo corrige al instante.
         asegurar_archivo_cierre(fecha)
-        flash("El día ya estaba cerrado. Se validó/generó el archivo de reporte.", "ok")
+        marcar_dia_cerrado(fecha, session.get("user"))
+        flash(f"El día {fecha_peru_txt(fecha)} ya estaba cerrado. Se validó/generó el archivo de reporte.", "ok")
     else:
+        if not dia_abierto(fecha):
+            flash(f"La fecha {fecha_peru_txt(fecha)} no está abierta. Ábrela antes de cerrarla.", "error")
+            return redirect(url_for("cierre_dia", fecha=fecha))
         filename, path, total_consumos, total_entregados, total_pendientes, total_importe = generar_excel_cierre(fecha)
         q_exec("""
             INSERT INTO cierres(fecha,cerrado_por,total_consumos,total_entregados,total_pendientes,total_importe,archivo_excel,correo_destino,correo_estado)
             VALUES(?,?,?,?,?,?,?,?,?)
         """, (fecha, session["user"], total_consumos, total_entregados, total_pendientes, total_importe, filename, "", "CIERRE MANUAL - ARCHIVO GENERADO"))
-        flash(f"Día cerrado manualmente. Reporte generado: {filename}", "ok")
-    return redirect(request.referrer or url_for("cierre_dia"))
+        marcar_dia_cerrado(fecha, session.get("user"))
+        flash(f"Día {fecha_peru_txt(fecha)} cerrado. Reporte generado: {filename}", "ok")
+    return redirect(url_for("cierre_dia", fecha=fecha))
 
 @app.route("/abrir_dia_manual")
 @login_required
 @roles_required("admin")
 def abrir_dia_manual():
-    fecha = hoy_iso()
-    q_exec("DELETE FROM cierres WHERE fecha=?", (fecha,))
-    flash("Día abierto/reabierto correctamente por administrador.", "ok")
-    return redirect(request.referrer or url_for("dashboard"))
+    fecha = validar_fecha_iso(request.args.get("fecha") or request.form.get("fecha"), hoy_iso())
+    abrir_dia_operativo(fecha, session.get("user"), reabrir=True)
+    flash(f"Día {fecha_peru_txt(fecha)} ABIERTO correctamente. Ya se pueden registrar consumos para esa fecha.", "ok")
+    return redirect(url_for("cierre_dia", fecha=fecha))
 
 
 def rows_filtrados_desde_request(solo_entregados=False):
@@ -3769,18 +3954,16 @@ def consumos():
     if request.method == "POST":
         fecha = request.form.get("fecha") or hoy_iso()
 
-        if fecha != hoy_iso():
-            flash("Solo se puede registrar consumo en la fecha actual de hoy. Las fechas anteriores o futuras son solo de consulta.", "error")
-            return redirect(url_for("consumos", fecha=fecha))
-
-        if dia_cerrado(fecha):
-            flash("El día ya está cerrado. No se puede registrar consumos. Al día siguiente el sistema abrirá automáticamente la nueva fecha.", "error")
+        fecha = validar_fecha_iso(fecha, hoy_iso())
+        if not dia_abierto(fecha):
+            estado = estado_dia(fecha)
+            flash(f"La fecha {fecha_peru_txt(fecha)} no está ABIERTA (estado: {estado.replace('_',' ')}). Abre el día antes de registrar consumos.", "error")
             return redirect(url_for("consumos", fecha=fecha))
 
         bloqueado, msg = registro_bloqueado()
         if bloqueado and session.get("role") != "admin":
             flash(msg, "error")
-            return redirect(url_for("consumos"))
+            return redirect(url_for("consumos", fecha=fecha))
 
         tipo = request.form.get("tipo", "Almuerzo")
         if tipo not in ["Almuerzo"]:
@@ -3824,7 +4007,7 @@ def consumos():
                     errores.append(f"{dni}: DNI no encontrado o errado")
                     continue
                 if not es_adicional and q_one("SELECT id FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni)):
-                    errores.append(f"{dni}: ya tiene consumo registrado hoy")
+                    errores.append(f"{dni}: ya tiene consumo registrado el {fecha_peru_txt(fecha)}")
                     continue
                 try:
                     q_exec("""
@@ -3846,14 +4029,14 @@ def consumos():
         trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
         if not trabajador:
             flash("DNI no encontrado o trabajador inactivo.", "error")
-            return redirect(url_for("consumos"))
+            return redirect(url_for("consumos", fecha=fecha))
 
         # REGLA FUERTE: 1 DNI = 1 consumo normal por día.
         if not es_adicional:
             duplicado = q_one("SELECT id,hora,tipo FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni))
             if duplicado:
-                flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy a las {duplicado['hora']}. Solo el admin puede registrar adicional.", "error")
-                return redirect(url_for("consumos"))
+                flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado el {fecha_peru_txt(fecha)} a las {duplicado['hora']}. Solo el admin puede registrar adicional.", "error")
+                return redirect(url_for("consumos", fecha=fecha))
 
         try:
             q_exec("""
@@ -3862,12 +4045,12 @@ def consumos():
             """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
         except Exception:
             flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}.", "error")
-            return redirect(url_for("consumos"))
+            return redirect(url_for("consumos", fecha=fecha))
 
-        flash("REGISTRO DE CONSUMO realizado correctamente." + (" Marcado como adicional." if es_adicional else ""), "ok")
-        return redirect(url_for("consumos"))
+        flash(f"REGISTRO DE CONSUMO realizado correctamente para {fecha_peru_txt(fecha)}." + (" Marcado como adicional." if es_adicional else ""), "ok")
+        return redirect(url_for("consumos", fecha=fecha))
 
-    fecha = request.args.get("fecha") or hoy_iso()
+    fecha = validar_fecha_iso(request.args.get("fecha") or hoy_iso(), hoy_iso())
     fecha_inicio = request.args.get("fecha_inicio") or fecha
     fecha_fin = request.args.get("fecha_fin") or fecha_inicio
     buscar = clean_text(request.args.get("buscar"))
@@ -3908,16 +4091,20 @@ def consumos():
         """ for r in rows
     ]) or "<tr id='fila_sin_registros'><td colspan='15'>Sin registros para este filtro.</td></tr>"
 
-    fecha_cerrada = bool(dia_cerrado(fecha))
-    fecha_es_hoy = (fecha == hoy_iso())
-    disabled = "disabled" if (fecha_cerrada or not fecha_es_hoy) else ""
+    estado_fecha = estado_dia(fecha)
+    fecha_abierta = (estado_fecha == "ABIERTO")
+    fecha_cerrada = (estado_fecha == "CERRADO")
+    disabled = "" if fecha_abierta else "disabled"
     bloqueado, msg_bloq = registro_bloqueado()
     aviso_bloq = f"<div class='flash error'>{msg_bloq}</div>" if bloqueado and session.get("role") != "admin" else ""
     aviso_fecha = ""
     if fecha_cerrada:
-        aviso_fecha = "<div class='flash error'>Esta fecha está CERRADA. Puedes revisarla, pero no registrar nuevos consumos.</div>"
-    elif not fecha_es_hoy:
-        aviso_fecha = "<div class='flash error'>Fecha seleccionada solo para consulta. El registro de consumo solo está permitido en la fecha actual de hoy.</div>"
+        aviso_fecha = f"<div class='flash error'>🔒 {fecha_peru_txt(fecha)} está CERRADO. Puedes consultarlo, pero no registrar nuevos consumos.</div>"
+    elif not fecha_abierta:
+        extra = f" <a class='btn btn-blue' style='margin-left:8px;padding:7px 10px' href='{url_for('abrir_dia_manual', fecha=fecha)}'>Abrir día</a>" if session.get('role') == 'admin' else ""
+        aviso_fecha = f"<div class='flash error'>⚠️ {fecha_peru_txt(fecha)} todavía NO ESTÁ ABIERTO. Primero debe abrirse el día.{extra}</div>"
+    else:
+        aviso_fecha = f"<div class='flash ok'>🟢 Día operativo ABIERTO: {fecha_peru_txt(fecha)}. Los registros se guardarán en esta fecha.</div>"
 
     filtros = filtro_bar(url_for("consumos"), fecha_inicio, fecha_fin, buscar)
 
@@ -3938,7 +4125,7 @@ def consumos():
       <div id="contador_lecturas_box" style="margin:8px 0 14px;padding:13px 14px;border-radius:16px;border:2px solid #16a34a;background:linear-gradient(135deg,#052e16,#064e3b);color:white;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;box-shadow:0 10px 24px rgba(22,163,74,.22)">
         <div style="font-size:25px">✅</div>
         <div>
-          <div style="font-weight:950;font-size:15px">LECTURAS GUARDADAS HOY</div>
+          <div style="font-weight:950;font-size:15px">LECTURAS GUARDADAS EN LA FECHA</div>
           <div style="font-size:12px;opacity:.88">Cada DNI válido suma aquí y se limpia para el siguiente.</div>
         </div>
         <div style="text-align:center;background:#22c55e;color:#052e16;border-radius:16px;padding:8px 14px;min-width:76px;font-weight:950">
@@ -3947,7 +4134,7 @@ def consumos():
         </div>
       </div>
       <form method="post" class="form-grid" id="form_consumo" onsubmit="return validarAntesEnviar(event)">
-        <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige una fecha para consultar. Solo hoy permite registrar." max="{hoy_iso()}">
+        <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige la fecha operativa. Puedes registrar si el día está ABIERTO.">
         <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
         <select id="fundo_select" name="fundo" {disabled}>
           {''.join([f'<option value="{f}">{f}</option>' for f in opciones_fundo()])}
@@ -4201,7 +4388,7 @@ def consumos():
       div.style.zIndex='2147483647'; div.style.padding='13px 14px'; div.style.borderRadius='14px';
       div.style.fontWeight='950'; div.style.color='white'; div.style.textAlign='center'; div.style.boxShadow='0 14px 34px rgba(0,0,0,.42)'; div.style.pointerEvents='none';
       div.style.background = ok ? '#008f39' : '#b91c1c'; div.style.border='2px solid rgba(255,255,255,.25)'; div.style.fontSize='14px'; div.style.lineHeight='1.25';
-      document.body.appendChild(div); setTimeout(()=>div.remove(), 3200);
+      document.body.appendChild(div); try{{ if(!ok || /GUARD|REGISTR|ENTREG|CORRECT/i.test(String(msg||''))) window.apbPlaySound(ok); }}catch(e){{}} setTimeout(()=>div.remove(), window.apbToastDuration ? window.apbToastDuration(ok) : (ok?5200:7600));
     }}
     async function validarDni(dni){{
       dni = soloDni(dni);
@@ -4463,7 +4650,7 @@ def consumos():
         }}
         if(arr.length === 0){{ e.preventDefault(); avisoMovil('No hay DNI válidos guardados para el registro masivo.', false); return false; }}
         document.getElementById('dni_lote').value = getCheckedLoteArray().join('\n');
-        if(!confirm('Se registrarán ' + getCheckedLoteArray().length + ' consumo(s) marcados para la fecha de hoy. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
+        if(!confirm('Se registrarán ' + getCheckedLoteArray().length + ' consumo(s) en la fecha operativa seleccionada. ¿Confirmas REGISTRO DE CONSUMO?')){{ e.preventDefault(); return false; }}
       }}
       try{{ sessionStorage.setItem('limpiar_lote_tras_envio', '1'); }}catch(ex){{}}
       return true;
@@ -4829,11 +5016,10 @@ def consumos():
 @roles_required("admin", "rrhh", "comedor")
 def api_registrar_consumo_auto():
     """Registro automático por DNI para modo masivo."""
-    fecha = request.form.get("fecha") or hoy_iso()
-    if fecha != hoy_iso():
-        return jsonify({"ok": False, "msg": "Solo se puede registrar consumo en la fecha actual de hoy."}), 400
-    if dia_cerrado(fecha):
-        return jsonify({"ok": False, "msg": "El día ya está cerrado. No se puede registrar consumos."}), 400
+    fecha = validar_fecha_iso(request.form.get("fecha") or hoy_iso(), hoy_iso())
+    if not dia_abierto(fecha):
+        estado = estado_dia(fecha)
+        return jsonify({"ok": False, "msg": f"La fecha {fecha_peru_txt(fecha)} no está ABIERTA (estado: {estado.replace('_',' ')})."}), 400
     bloqueado, msg_bloq = registro_bloqueado()
     if bloqueado and session.get("role") != "admin":
         return jsonify({"ok": False, "msg": msg_bloq}), 400
@@ -4862,7 +5048,7 @@ def api_registrar_consumo_auto():
     if modo_prueba and "[MODO PRUEBA]" not in obs:
         obs = ("[MODO PRUEBA] " + (obs or "REGISTRAR TU GRUPO")).upper()
     if not es_adicional and q_one("SELECT id,hora FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0", (fecha, dni)):
-        return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado hoy."}), 409
+        return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado el {fecha_peru_txt(fecha)}."}), 409
     hora = hora_now()
     try:
         new_id = q_exec("""
@@ -4942,13 +5128,11 @@ def api_entregas_pedidos():
 @login_required
 @roles_required("admin", "rrhh", "comedor")
 def api_entregar_dni_auto():
-    fecha = request.form.get("fecha") or hoy_iso()
+    fecha = validar_fecha_iso(request.form.get("fecha") or hoy_iso(), hoy_iso())
     dni = clean_dni(request.form.get("dni"))
     responsable = clean_text(request.form.get("responsable") or session.get("user", "")).upper()
-    if fecha != hoy_iso():
-        return jsonify({"ok": False, "msg": "Solo se puede entregar en la fecha actual de hoy."}), 400
-    if dia_cerrado(fecha):
-        return jsonify({"ok": False, "msg": "Día cerrado. No se pueden entregar más pedidos."}), 400
+    if not dia_abierto(fecha):
+        return jsonify({"ok": False, "msg": f"La fecha {fecha_peru_txt(fecha)} no está ABIERTA. No se pueden entregar pedidos."}), 400
     if not responsable:
         return jsonify({"ok": False, "msg": "Primero coloca RESPONSABLE DE ENTREGA."}), 400
     if len(dni) != 8:
@@ -4959,7 +5143,7 @@ def api_entregar_dni_auto():
     pendientes = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? AND estado='PENDIENTE' ORDER BY hora,id", (fecha, dni))
     todos = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni))
     if not todos:
-        return jsonify({"ok": False, "msg": f"{dni} - {trabajador['nombre']} no tiene consumo registrado hoy."}), 404
+        return jsonify({"ok": False, "msg": f"{dni} - {trabajador['nombre']} no tiene consumo registrado en la fecha seleccionada."}), 404
     if not pendientes:
         return jsonify({"ok": False, "msg": f"{dni} - {trabajador['nombre']} ya figura ENTREGADO o sin pendiente."}), 409
     entregado_en = now_app().strftime("%Y-%m-%d %H:%M:%S")
@@ -4992,12 +5176,12 @@ def api_entregar_dni_auto():
 @login_required
 @roles_required("admin", "rrhh", "comedor")
 def entregas():
-    fecha = request.values.get("fecha") or hoy_iso()
+    fecha = validar_fecha_iso(request.values.get("fecha") or hoy_iso(), hoy_iso())
     dni = clean_dni(request.values.get("dni"))
 
     if request.method == "POST":
-        if dia_cerrado(fecha):
-            flash("Día cerrado. No se pueden entregar más pedidos.", "error")
+        if not dia_abierto(fecha):
+            flash(f"La fecha {fecha_peru_txt(fecha)} no está ABIERTA. No se pueden entregar pedidos.", "error")
             return redirect(url_for("entregas", fecha=fecha, dni=dni))
         responsable = clean_text(request.form.get("responsable_entrega") or session.get("user", "")).upper()
         ids = request.form.getlist("ids")
@@ -5015,6 +5199,13 @@ def entregas():
             audit_event("ENTREGAR_PEDIDO", "consumos", id_, f"DNI {dni} - responsable {responsable}")
         flash(f"Pedidos entregados: {len(ids)}", "ok")
         return redirect(url_for("entregas", dni=dni, fecha=fecha))
+
+    estado_fecha_entrega = estado_dia(fecha)
+    fecha_abierta_entrega = estado_fecha_entrega == "ABIERTO"
+    if fecha_abierta_entrega:
+        aviso_entrega = f"<div class='flash ok'>🟢 Día operativo ABIERTO: {fecha_peru_txt(fecha)}. Se permiten entregas.</div>"
+    else:
+        aviso_entrega = f"<div class='flash error'>⚠️ {fecha_peru_txt(fecha)} no está ABIERTO (estado: {estado_fecha_entrega.replace('_',' ')}). Las entregas están bloqueadas.</div>"
 
     trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,)) if dni else None
     pedidos = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni)) if dni else q_all("SELECT * FROM consumos WHERE fecha=? ORDER BY CASE estado WHEN 'PENDIENTE' THEN 0 ELSE 1 END, hora,id", (fecha,))
@@ -5050,9 +5241,10 @@ def entregas():
           <td><span class="badge {'ok' if r['estado']=='ENTREGADO' else 'warn'}">{r['estado']}</span></td>
         </tr>
         """ for i, r in enumerate(pedidos, 1)
-    ]) or "<tr><td colspan='9'>Sin pedidos para este DNI hoy.</td></tr>"
+    ]) or "<tr><td colspan='9'>Sin pedidos para este DNI en la fecha seleccionada.</td></tr>"
 
     html = topbar("Entrega de Pedidos", "Lectura individual y masiva por DNI igual que Consumos") + f"""
+    {aviso_entrega}
     <div class="card">
       <h3 style="margin-top:0">Entrega rápida por DNI</h3>
       <div class="entrega-pro-panel">
@@ -5112,8 +5304,7 @@ def entregas():
     function entregaToast(msg, ok=true){{
       const d=document.createElement('div'); d.textContent=msg;
       d.style.cssText='position:fixed;left:10px;right:10px;top:14px;z-index:999999;padding:13px;border-radius:13px;text-align:center;font-weight:950;color:white;background:'+(ok?'#166534':'#991b1b')+';box-shadow:0 12px 30px rgba(0,0,0,.35)';
-      document.body.appendChild(d); setTimeout(()=>d.remove(),2300);
-      try{{ if(navigator.vibrate) navigator.vibrate(ok?90:[80,50,80]); const C=window.AudioContext||window.webkitAudioContext; const c=new C(); const o=c.createOscillator(); const g=c.createGain(); o.connect(g); g.connect(c.destination); o.frequency.value=ok?980:220; g.gain.value=.08; o.start(); setTimeout(()=>{{o.stop();c.close();}},140); }}catch(e){{}}
+      document.body.appendChild(d); try{{ if(!ok || /GUARD|REGISTR|ENTREG|CORRECT/i.test(String(msg||''))) window.apbPlaySound(ok); }}catch(e){{}} setTimeout(()=>d.remove(), window.apbToastDuration ? window.apbToastDuration(ok) : (ok?5200:7600));
     }}
     function responsableEntrega(){{ return String(document.getElementById('responsable_entrega')?.value||'').trim().toUpperCase(); }}
     function setEstadoEntrega(msg, ok=true){{ const e=document.getElementById('estado_entrega_auto'); if(e){{ e.style.display='block'; e.style.background=ok?'#dcfce7':'#fee2e2'; e.style.color=ok?'#166534':'#991b1b'; e.textContent=msg; }} }}
@@ -5143,7 +5334,7 @@ def entregas():
     function dniEntregaHandler(){{ const inp=document.getElementById('dni_entrega'); if(!inp) return; inp.value=onlyDniEntrega(inp.value); clearTimeout(entregaTimer); if(inp.value.length===8) entregaTimer=setTimeout(()=>buscarTrabajadorEntrega(false),70); }}
     async function refrescarEntregas(){{
       const dni=document.getElementById('dni_entrega')?.value||''; const fecha=document.getElementById('fecha_entrega')?.value||'';
-      try{{ const res=await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}&fecha=${{encodeURIComponent(fecha)}}`); const data=await res.json(); const body=document.getElementById('pedidos_body'); const contador=document.getElementById('contador_pedidos'); if(contador) contador.textContent=`${{data.count}} pedido(s)`; if(!body) return; if(!data.pedidos||data.pedidos.length===0){{ body.innerHTML='<tr><td colspan="9">Sin pedidos para este DNI hoy.</td></tr>'; return; }} body.innerHTML=data.pedidos.map(p=>`<tr><td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente?'checked':'disabled'}}></td><td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.dni||dni||'-'}}</td><td>${{p.trabajador||'-'}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td><td>${{p.observacion}}</td><td><span class="badge ${{p.estado==='ENTREGADO'?'ok':'warn'}}">${{p.estado}}</span></td></tr>`).join(''); }}catch(e){{console.warn(e)}}
+      try{{ const res=await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}&fecha=${{encodeURIComponent(fecha)}}`); const data=await res.json(); const body=document.getElementById('pedidos_body'); const contador=document.getElementById('contador_pedidos'); if(contador) contador.textContent=`${{data.count}} pedido(s)`; if(!body) return; if(!data.pedidos||data.pedidos.length===0){{ body.innerHTML='<tr><td colspan="9">Sin pedidos para este DNI en la fecha seleccionada.</td></tr>'; return; }} body.innerHTML=data.pedidos.map(p=>`<tr><td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente?'checked':'disabled'}}></td><td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.dni||dni||'-'}}</td><td>${{p.trabajador||'-'}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td><td>${{p.observacion}}</td><td><span class="badge ${{p.estado==='ENTREGADO'?'ok':'warn'}}">${{p.estado}}</span></td></tr>`).join(''); }}catch(e){{console.warn(e)}}
     }}
     async function abrirScannerEntrega(){{
       const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='block';
@@ -5209,10 +5400,6 @@ def entregas():
 @roles_required("admin", "rrhh", "comedor")
 def carga_masiva():
     if request.method == "POST":
-        if dia_cerrado():
-            flash("Día cerrado. No se puede cargar consumos.", "error")
-            return redirect(url_for("carga_masiva"))
-
         f = request.files.get("excel")
         if not f or not f.filename.lower().endswith((".xlsx", ".xls")):
             flash("Sube un archivo Excel válido.", "error")
@@ -5249,7 +5436,7 @@ def carga_masiva():
             else:
                 fecha = hoy_iso()
 
-            if dia_cerrado(fecha):
+            if not dia_abierto(fecha):
                 errores += 1
                 continue
 
@@ -5465,31 +5652,39 @@ def trabajadores():
 @login_required
 @roles_required("admin", "comedor", "rrhh")
 def cierre_dia():
-    fecha = hoy_iso()
-    cerrado = dia_cerrado(fecha)
+    fecha = validar_fecha_iso(request.values.get("fecha") or hoy_iso(), hoy_iso())
+    estado = estado_dia(fecha)
+    abierto = estado == "ABIERTO"
+    cerrado = estado == "CERRADO"
 
     if request.method == "POST":
         if cerrado:
-            flash("Este día ya fue cerrado.", "error")
-            return redirect(url_for("cierre_dia"))
+            flash(f"El día {fecha_peru_txt(fecha)} ya fue cerrado.", "error")
+            return redirect(url_for("cierre_dia", fecha=fecha))
+        if not abierto:
+            flash(f"La fecha {fecha_peru_txt(fecha)} no está abierta. Ábrela antes de cerrarla.", "error")
+            return redirect(url_for("cierre_dia", fecha=fecha))
 
         correo = clean_text(request.form.get("correo"))
         filename, path, total_consumos, total_entregados, total_pendientes, total_importe = generar_excel_cierre(fecha)
 
-        estado_correo = send_report_email(
-            correo,
-            f"Cierre comedor APB SAC {fecha_peru_txt(fecha)}",
-            f"Se adjunta cierre del día. Consumos: {total_consumos}. Entregados: {total_entregados}. Pendientes: {total_pendientes}. Total: {money(total_importe)}",
-            path
-        )
+        estado_correo = "SIN ENVÍO"
+        if correo:
+            estado_correo = send_report_email(
+                correo,
+                f"Cierre comedor APB SAC {fecha_peru_txt(fecha)}",
+                f"Se adjunta cierre del día. Consumos: {total_consumos}. Entregados: {total_entregados}. Pendientes: {total_pendientes}. Total: {money(total_importe)}",
+                path
+            )
 
         q_exec("""
             INSERT INTO cierres(fecha,cerrado_por,total_consumos,total_entregados,total_pendientes,total_importe,archivo_excel,correo_destino,correo_estado)
             VALUES(?,?,?,?,?,?,?,?,?)
         """, (fecha, session["user"], total_consumos, total_entregados, total_pendientes, total_importe, filename, correo, estado_correo))
+        marcar_dia_cerrado(fecha, session.get("user"))
 
-        flash(f"Día cerrado. Reporte generado: {filename}. Correo: {estado_correo}", "ok")
-        return redirect(url_for("cierre_dia"))
+        flash(f"Día {fecha_peru_txt(fecha)} CERRADO. Reporte generado: {filename}. Correo: {estado_correo}", "ok")
+        return redirect(url_for("cierre_dia", fecha=fecha))
 
     stats = q_one("""
         SELECT COUNT(*) c, COALESCE(SUM(total),0) t,
@@ -5498,50 +5693,80 @@ def cierre_dia():
     """, (fecha,))
     usuarios = q_all("SELECT creado_por, COUNT(*) c, COALESCE(SUM(total),0) t FROM consumos WHERE fecha=? GROUP BY creado_por", (fecha,))
     ultimo = q_one("SELECT hora FROM consumos WHERE fecha=? ORDER BY hora DESC,id DESC LIMIT 1", (fecha,))
+
     cerrado_html = ""
     if cerrado:
-        filename, _, _, _, _, _ = asegurar_archivo_cierre(fecha)
-        cerrado = dia_cerrado(fecha)
-        cerrado_html = f"""
-        <div class="card">
-          <span class="badge off">DÍA CERRADO</span>
-          <p>Archivo generado: <b>{filename}</b></p>
-          <a class="btn btn-blue" href="{url_for('descargar_cierre', filename=filename)}">Descargar reporte</a>
-        </div>
-        """
+        cierre_existente = dia_cerrado(fecha)
+        if cierre_existente:
+            filename, _, _, _, _, _ = asegurar_archivo_cierre(fecha)
+            cerrado_html = f"""
+            <div class="card" style="margin-top:12px">
+              <span class="badge off">🔴 DÍA CERRADO</span>
+              <p>Archivo generado: <b>{filename}</b></p>
+              <a class="btn btn-blue" href="{url_for('descargar_cierre', filename=filename)}">Descargar reporte</a>
+            </div>
+            """
+
     usuarios_html = "".join([
         f"<div class='user-row'><span>👤 <b>{u['creado_por'] or 'sin usuario'}</b></span><span>{u['c']} consumos</span><span>{money(u['t'])}</span></div>"
         for u in usuarios
-    ]) or "<div class='muted'>Sin usuarios con registros hoy.</div>"
+    ]) or f"<div class='muted'>Sin usuarios con registros el {fecha_peru_txt(fecha)}.</div>"
 
-    form = "" if cerrado else f"""
-    <form method="post">
-      <label><b>Correo destino</b></label><br><br>
-      <input name="correo" value="{os.getenv('REPORTE_DESTINO','administracion@prize.pe')}" placeholder="correo@empresa.com">
-      <br><br>
-      <label><input type="checkbox" checked> Incluir archivo Excel</label>
-      <br><br>
-      <button class="btn-orange" style="width:100%">Cerrar día y enviar reporte</button>
-    </form>
-    """
+    form = ""
+    if abierto:
+        form = f"""
+        <form method="post">
+          <input type="hidden" name="fecha" value="{fecha}">
+          <label><b>Correo destino (opcional)</b></label><br><br>
+          <input name="correo" value="{os.getenv('REPORTE_DESTINO','')}" placeholder="correo@empresa.com">
+          <br><br>
+          <label><input type="checkbox" checked> Incluir archivo Excel</label>
+          <br><br>
+          <button class="btn-orange" style="width:100%">🔒 Cerrar {fecha_peru_txt(fecha)} y generar reporte</button>
+        </form>
+        """
+    elif not cerrado:
+        form = f"<div class='flash error'>⚠️ Esta fecha todavía NO ESTÁ ABIERTA. Debe abrirse antes de registrar o cerrar.</div>"
 
     admin_extra = ""
     if session.get("role") == "admin":
+        abrir_txt = "🔓 Reabrir día" if cerrado else ("✅ Día abierto" if abierto else "🔓 Abrir día")
+        abrir_cls = "btn-blue" if not abierto else "btn"
+        abrir_disabled = "style='pointer-events:none;opacity:.55'" if abierto else ""
         admin_extra = f"""
         <div class='admin-actions'>
-          <a class='btn btn-orange' href='{url_for('cerrar_dia_manual')}'>🔒 Cerrar día</a>
-          <a class='btn btn-blue' href='{url_for('abrir_dia_manual')}'>🔓 Abrir día</a>
-          <a class='btn' href='{url_for('exportar_concesionaria')}'>Archivo concesionaria</a>
-          <a class='btn btn-orange' href='{url_for('reporte_entrega')}'>Reporte entrega/pago</a>
+          <a class='btn {abrir_cls}' {abrir_disabled} href='{url_for('abrir_dia_manual', fecha=fecha)}'>{abrir_txt}</a>
+          <a class='btn btn-orange' href='{url_for('cerrar_dia_manual', fecha=fecha)}'>🔒 Cerrar día</a>
+          <a class='btn' href='{url_for('exportar_concesionaria', fecha_inicio=fecha, fecha_fin=fecha)}'>Archivo concesionaria</a>
+          <a class='btn btn-orange' href='{url_for('reporte_entrega', fecha_inicio=fecha, fecha_fin=fecha)}'>Reporte entrega/pago</a>
         </div>
         """
-    html = topbar("Cierre de Día y Reportes", "Consolida y envía el reporte del día por correo") + admin_extra + f"""
+
+    if abierto:
+        badge = "<span class='badge ok'>🟢 DÍA ABIERTO</span>"
+    elif cerrado:
+        badge = "<span class='badge off'>🔴 DÍA CERRADO</span>"
+    else:
+        badge = "<span class='badge off'>⚪ DÍA NO ABIERTO</span>"
+
+    html = topbar("Días Operativos / Cierre", "Abre, registra y cierra cualquier fecha de forma controlada") + f"""
+    <div class="card" style="margin-bottom:14px">
+      <form method="get" action="{url_for('cierre_dia')}" class="form-grid" style="grid-template-columns:minmax(180px,260px) auto 1fr;align-items:end">
+        <div>
+          <label><b>Fecha operativa</b></label>
+          <input type="date" name="fecha" value="{fecha}">
+        </div>
+        <button class="btn-blue">Ver fecha</button>
+        <div class="muted small">Puedes abrir mañana desde hoy. Solo una fecha en estado <b>ABIERTO</b> acepta nuevos registros.</div>
+      </form>
+    </div>
+    {admin_extra}
     <div class="card">
-      <span class="badge {'off' if cerrado else 'ok'}">🟢 {'DÍA CERRADO' if cerrado else 'DÍA ABIERTO'}</span>
-      <span style="margin-left:18px" class="muted">Fecha actual: {fecha_peru_txt(fecha)}</span>
+      {badge}
+      <span style="margin-left:18px" class="muted">Fecha seleccionada: <b>{fecha_peru_txt(fecha)}</b></span>
 
       <div class="mini-kpis">
-        <div class="card"><span class="muted small">Total consumos</span><b>{stats['c']}</b></div>
+        <div class="card"><span class="muted small">Total consumos</span><b>{stats['c'] or 0}</b></div>
         <div class="card"><span class="muted small">Total facturado</span><b>{money(stats['t'])}</b></div>
         <div class="card"><span class="muted small">Usuarios que registraron</span><b>{len(usuarios)}</b></div>
         <div class="card"><span class="muted small">Último registro</span><b>{ultimo['hora'] if ultimo else '--:--'}</b></div>
@@ -5549,13 +5774,13 @@ def cierre_dia():
     </div>
 
     <br>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+    <div class="cierre-grid-dinamico" style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
       <div class="card">
-        <h3 style="margin-top:0">Usuarios que registraron hoy</h3>
+        <h3 style="margin-top:0">Usuarios que registraron</h3>
         {usuarios_html}
       </div>
       <div class="card">
-        <h3 style="margin-top:0">Enviar reporte por correo</h3>
+        <h3 style="margin-top:0">Cierre / reporte</h3>
         {form}
         {cerrado_html}
       </div>
