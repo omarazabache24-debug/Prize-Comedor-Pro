@@ -152,6 +152,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             empresa TEXT DEFAULT 'APB SAC',
             planilla TEXT DEFAULT '',
+            codigo TEXT DEFAULT '',
             dni TEXT UNIQUE NOT NULL,
             nombre TEXT NOT NULL,
             cargo TEXT DEFAULT '',
@@ -228,6 +229,10 @@ def init_db():
         trab_cols = [x["name"] for x in conn.execute("PRAGMA table_info(trabajadores)").fetchall()]
         if "planilla" not in trab_cols:
             conn.execute("ALTER TABLE trabajadores ADD COLUMN planilla TEXT DEFAULT ''")
+        if "codigo" not in trab_cols:
+            conn.execute("ALTER TABLE trabajadores ADD COLUMN codigo TEXT DEFAULT ''")
+        # Índice de búsqueda: el código puede venir del ERP/Excel y se usa como identificador alternativo al DNI.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trabajadores_codigo ON trabajadores(codigo)")
         cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
         for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0"), ("modo_prueba", "INTEGER", "0")]:
             if col not in cols:
@@ -397,6 +402,63 @@ def clean_dni(v):
     return extract_dni(v)
 
 
+def clean_codigo(v):
+    """Normaliza el código interno del trabajador sin destruir ceros a la izquierda si vienen como texto."""
+    if v is None or (hasattr(pd, "isna") and pd.isna(v)):
+        return ""
+    if isinstance(v, bool):
+        return str(v).upper()
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    raw = str(v).strip().upper()
+    # Excel suele convertir códigos numéricos a texto tipo 12345.0.
+    if re.fullmatch(r"\d+\.0+", raw):
+        raw = raw.split(".", 1)[0]
+    return re.sub(r"\s+", "", raw)[:80]
+
+
+def resolver_trabajador(identificador):
+    """Busca un trabajador activo por DNI o por CODIGO.
+
+    Prioridad:
+    1) Si se digitó exactamente 8 dígitos, primero intenta DNI (compatibilidad histórica).
+    2) Intenta CODIGO exacto.
+    3) Si el QR contiene un DNI de 8 dígitos dentro de un texto mayor, intenta ese DNI.
+    Devuelve (trabajador, tipo, valor_normalizado, mensaje_error).
+    """
+    raw = clean_text(identificador)
+    if not raw:
+        return None, "", "", "Ingresa DNI o CÓDIGO."
+
+    codigo = clean_codigo(raw)
+    raw_digits = re.sub(r"\D", "", raw)
+
+    if re.fullmatch(r"\d{8}", codigo or ""):
+        t = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (codigo,))
+        if t:
+            return t, "DNI", codigo, ""
+
+    if codigo:
+        coinciden = q_all("SELECT * FROM trabajadores WHERE codigo=? AND activo=1 ORDER BY id LIMIT 2", (codigo,))
+        if len(coinciden) == 1:
+            return coinciden[0], "CODIGO", codigo, ""
+        if len(coinciden) > 1:
+            return None, "CODIGO", codigo, f"Código duplicado en la base: {codigo}. Corrige el maestro de trabajadores."
+
+    # No usar el relleno con ceros de clean_dni para códigos cortos.
+    dni = ""
+    if len(raw_digits) >= 8:
+        dni = extract_dni(raw)
+    if len(dni) == 8:
+        t = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+        if t:
+            return t, "DNI", dni, ""
+
+    return None, "", codigo or raw, f"DNI/CÓDIGO no encontrado o trabajador inactivo: {codigo or raw}"
+
+
 def cfg_get(clave, default=""):
     r = q_one("SELECT valor FROM configuracion WHERE clave=?", (clave,))
     return r["valor"] if r else default
@@ -458,6 +520,7 @@ def col_value(row, *names):
         ],
         "EMPRESA": ["EMPRESA", "RAZON_SOCIAL", "COMPANIA", "CIA", "ORGANIZACION"],
         "PLANILLA": ["PLANILLA", "TIPO_PLANILLA", "TIPO_DE_PLANILLA", "REGIMEN", "NOMINA"],
+        "CODIGO": ["CODIGO", "COD", "COD_TRABAJADOR", "CODIGO_TRABAJADOR", "COD_PERSONAL", "CODIGO_PERSONAL", "COD_EMPLEADO", "CODIGO_EMPLEADO", "ID_TRABAJADOR", "ID_PERSONAL"],
         "CARGO": ["CARGO", "PUESTO", "OCUPACION", "FUNCION", "LABOR", "ACTIVIDAD"],
         "AREA": ["AREA", "AREA_TRABAJO", "SEDE", "FUNDO", "UNIDAD", "DEPARTAMENTO", "CENTRO_COSTO"],
     }
@@ -480,6 +543,7 @@ def _normalizar_fila_trabajador(row):
     return {
         "empresa": (clean_text(col_value(row, "EMPRESA")) or "APB SAC").upper(),
         "planilla": clean_text(col_value(row, "PLANILLA")).upper(),
+        "codigo": clean_codigo(col_value(row, "CODIGO")),
         "dni": dni,
         "nombre": nombre,
         "cargo": clean_text(col_value(row, "CARGO")).upper(),
@@ -501,6 +565,8 @@ def _buscar_cabecera_excel(rows_preview):
             score += 3
         if "EMPRESA" in joined:
             score += 1
+        if "CODIGO" in joined or "COD_TRABAJADOR" in joined or "COD_PERSONAL" in joined:
+            score += 1
         if "AREA" in joined or "FUNDO" in joined:
             score += 1
         if score > mejor_score:
@@ -513,7 +579,8 @@ def leer_trabajadores_excel_stream(file_storage):
     """Lee TODO el Excel de trabajadores.
     - Lee todas las hojas.
     - Detecta cabeceras aunque no estén en la primera fila.
-    - Acepta columnas de reportes: DNI, TRABAJADOR, EMPRESA, AREA.
+    - Acepta columnas de reportes: DNI, CODIGO, TRABAJADOR, EMPRESA, AREA.
+    - CODIGO es opcional y sirve como identificador alternativo de lectura.
     - No exige CARGO ni AREA para no perder trabajadores válidos.
     Devuelve: registros(dict por DNI), total_filas, omitidos.
     """
@@ -571,13 +638,13 @@ def leer_trabajadores_excel_stream(file_storage):
 
 def reemplazar_trabajadores_batch(registros):
     """Reemplaza la tabla trabajadores en una sola transacción SQLite."""
-    data = [(r["empresa"], r.get("planilla", ""), r["dni"], r["nombre"], r["cargo"], r["area"]) for r in registros]
+    data = [(r["empresa"], r.get("planilla", ""), r.get("codigo", ""), r["dni"], r["nombre"], r["cargo"], r["area"]) for r in registros]
     if not data:
         return 0
     with get_conn() as conn:
         conn.execute("DELETE FROM trabajadores")
         conn.executemany(
-            "INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,1)",
+            "INSERT INTO trabajadores(empresa,planilla,codigo,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,?,1)",
             data,
         )
         conn.commit()
@@ -3920,32 +3987,37 @@ def dashboard():
 
 
 
-@app.route("/api/trabajador/<dni>")
+@app.route("/api/trabajador/<identificador>")
 @login_required
-def api_trabajador(dni):
-    dni = clean_dni(dni)
-    t = q_one("SELECT dni,nombre,empresa,area,cargo FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+def api_trabajador(identificador):
+    t, tipo_id, valor_id, error = resolver_trabajador(identificador)
     if not t:
-        resp = jsonify({"ok": False, "success": False, "msg": "DNI no encontrado"})
+        resp = jsonify({"ok": False, "success": False, "msg": error or "DNI/CÓDIGO no encontrado", "identificador": valor_id})
     else:
-        resp = jsonify({"ok": True, "success": True, "dni": t["dni"], "nombre": t["nombre"], "empresa": t["empresa"], "area": t["area"], "cargo": t["cargo"]})
+        resp = jsonify({
+            "ok": True, "success": True,
+            "dni": t["dni"], "codigo": t["codigo"] or "", "nombre": t["nombre"],
+            "empresa": t["empresa"], "area": t["area"], "cargo": t["cargo"],
+            "tipo_identificador": tipo_id, "identificador": valor_id,
+        })
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
 
-@app.route("/api/buscar_dni/<dni>")
+@app.route("/api/buscar_dni/<identificador>")
 @login_required
-def api_buscar_dni(dni):
-    return api_trabajador(dni)
+def api_buscar_dni(identificador):
+    return api_trabajador(identificador)
 
-@app.route("/buscar_trabajador/<dni>")
+@app.route("/buscar_trabajador/<identificador>")
 @login_required
-def buscar_trabajador_compat(dni):
-    return api_trabajador(dni)
+def buscar_trabajador_compat(identificador):
+    return api_trabajador(identificador)
 
 @app.route("/api/trabajador")
 @login_required
 def api_trabajador_query():
-    return api_trabajador(request.args.get("dni", ""))
+    identificador = request.args.get("q") or request.args.get("dni") or request.args.get("codigo") or ""
+    return api_trabajador(identificador)
 
 @app.route("/consumos", methods=["GET", "POST"])
 @login_required
@@ -4025,11 +4097,12 @@ def consumos():
             flash(msg, "ok" if not errores else "error")
             return redirect(url_for("consumos", fecha=fecha))
 
-        dni = clean_dni(request.form.get("dni"))
-        trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+        identificador = request.form.get("dni")
+        trabajador, tipo_id, valor_id, error_id = resolver_trabajador(identificador)
         if not trabajador:
-            flash("DNI no encontrado o trabajador inactivo.", "error")
+            flash(error_id or "DNI/CÓDIGO no encontrado o trabajador inactivo.", "error")
             return redirect(url_for("consumos", fecha=fecha))
+        dni = trabajador["dni"]
 
         # REGLA FUERTE: 1 DNI = 1 consumo normal por día.
         if not es_adicional:
@@ -4112,21 +4185,22 @@ def consumos():
     # Antes esta variable no existía dentro de /consumos y generaba error 500 al hacer clic en Consumos.
     total_consumos_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
 
-    html = topbar("Registro y control de consumos", "Registra por digitación o lector QR usando el DNI") + f"""
+    html = topbar("Registro y control de consumos", "Registra por digitación, código o lector QR/barras usando DNI o CÓDIGO") + f"""
     {aviso_bloq}
     {aviso_fecha}
 
     <div class="card">
       <h3 style="margin-top:0">Registrar consumo</h3>
       <div id="indicador_masivo_principal" style="margin:8px 0 12px;padding:14px 16px;border-radius:14px;border:2px solid #38bdf8;background:#e0f2fe;color:#075985;font-weight:950;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <span>📦 Registro masivo automático activo: primero coloca RESPONSABLE; cada DNI válido se guardará al instante y aparecerá en CONSUMOS DE LA FECHA.</span>
+        <span>📦 Registro masivo automático activo: primero coloca RESPONSABLE; cada DNI o CÓDIGO válido se guardará al instante y aparecerá en CONSUMOS DE LA FECHA.</span>
         <span id="indicador_masivo_contador" style="background:#0d73b8;color:white;border-radius:999px;padding:7px 12px">0 en lote</span>
       </div>
       <div id="contador_lecturas_box" style="margin:8px 0 14px;padding:13px 14px;border-radius:16px;border:2px solid #16a34a;background:linear-gradient(135deg,#052e16,#064e3b);color:white;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;box-shadow:0 10px 24px rgba(22,163,74,.22)">
         <div style="font-size:25px">✅</div>
         <div>
           <div style="font-weight:950;font-size:15px">LECTURAS GUARDADAS EN LA FECHA</div>
-          <div style="font-size:12px;opacity:.88">Cada DNI válido suma aquí y se limpia para el siguiente.</div>
+          <div style="font-size:12px;opacity:.88">Cada DNI o CÓDIGO válido suma aquí y se limpia para el siguiente.</div>
+          <div id="ultimo_trabajador_lectura" style="font-size:14px;font-weight:950;margin-top:4px;color:#dcfce7;line-height:1.2;overflow-wrap:anywhere">Último trabajador: —</div>
         </div>
         <div style="text-align:center;background:#22c55e;color:#052e16;border-radius:16px;padding:8px 14px;min-width:76px;font-weight:950">
           <div id="contador_lecturas_hoy" style="font-size:26px;line-height:1">{total_consumos_fecha}</div>
@@ -4141,7 +4215,7 @@ def consumos():
         </select>
         <input id="grupo_consumo" name="observacion" placeholder="GRUPO OBLIGATORIO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
         <input id="comedor_select" name="comedor" placeholder="COMEDOR" value="Comedor 01" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
-        <input id="dni_consumo" name="dni" placeholder="DNI / QR" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
+        <input id="dni_consumo" name="dni" placeholder="DNI / CÓDIGO / QR" required autofocus inputmode="text" autocapitalize="characters" maxlength="80" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
         <input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}>
         <button type="button" class="btn-blue" onclick="buscarTrabajadorConsumo(true)" {disabled}>🔎 Buscar trabajador</button>
         <button type="button" id="btn_qr" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Cámara QR / Barras</button>
@@ -4390,10 +4464,11 @@ def consumos():
       div.style.background = ok ? '#008f39' : '#b91c1c'; div.style.border='2px solid rgba(255,255,255,.25)'; div.style.fontSize='14px'; div.style.lineHeight='1.25';
       document.body.appendChild(div); try{{ if(!ok || /GUARD|REGISTR|ENTREG|CORRECT/i.test(String(msg||''))) window.apbPlaySound(ok); }}catch(e){{}} setTimeout(()=>div.remove(), window.apbToastDuration ? window.apbToastDuration(ok) : (ok?5200:7600));
     }}
-    async function validarDni(dni){{
-      dni = soloDni(dni);
-      if(dni.length !== 8) return {{ok:false, msg:'DNI incompleto'}};
-      const r = await fetch('/api/trabajador/' + encodeURIComponent(dni), {{cache:'no-store'}});
+    function identificadorLectura(v){{ return String(v || '').trim().toUpperCase().slice(0,120); }}
+    async function validarDni(identificador){{
+      identificador = identificadorLectura(identificador);
+      if(!identificador) return {{ok:false, msg:'Ingresa DNI o CÓDIGO'}};
+      const r = await fetch('/api/trabajador?q=' + encodeURIComponent(identificador) + '&_=' + Date.now(), {{cache:'no-store'}});
       return await r.json();
     }}
     async function buscarTrabajadorConsumo(force=false){{
@@ -4508,29 +4583,30 @@ def consumos():
     async function procesarDniQR(texto){{
       if(scannerBusy) return;
       if(bloquearSiNoHayResponsable(true)) return;
-      const dni = soloDni(texto);
-      if(dni.length !== 8){{ avisoMovil('QR/barras inválido: no contiene DNI de 8 dígitos.', false); return; }}
+      const identificador = identificadorLectura(texto);
+      if(!identificador){{ avisoMovil('QR/barras inválido: no contiene DNI o CÓDIGO.', false); return; }}
       const ahoraScan = Date.now();
-      if(document.getElementById('modo_lote')?.checked && dni === ultimoScanDni && (ahoraScan - ultimoScanTs) < 2500) return;
-      ultimoScanDni = dni; ultimoScanTs = ahoraScan;
+      if(document.getElementById('modo_lote')?.checked && identificador === ultimoScanDni && (ahoraScan - ultimoScanTs) < 2500) return;
+      ultimoScanDni = identificador; ultimoScanTs = ahoraScan;
       scannerBusy = true;
       const inp = document.getElementById('dni_consumo');
       const out = document.getElementById('nombre_trabajador');
-      if(inp) inp.value = dni;
+      if(inp) inp.value = identificador;
       try{{
-        const d = await validarDni(dni);
+        const d = await validarDni(identificador);
         if(d.ok){{
+          const dni = d.dni || soloDni(identificador);
           if(out) out.value = d.nombre || '';
           const info = document.getElementById('info_trabajador_consumo');
-          if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>' + (d.nombre || '-') + '</div><div><b>DNI</b><br>' + dni + '</div><div><b>Área</b><br>' + (d.area || '-') + '</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>'; }}
+          if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>' + (d.nombre || '-') + '</div><div><b>DNI</b><br>' + (d.dni || '-') + '</div><div><b>Código</b><br>' + (d.codigo || '-') + '</div><div><b>Área</b><br>' + (d.area || '-') + '</div></div>'; }}
           ultimoDniValidado = dni;
           if(document.getElementById('modo_lote')?.checked){{ agregarDniLote(dni, d.nombre); }}
-          else {{ beepOk(); avisoMovil('DNI reconocido: ' + (d.nombre || dni), true); }}
+          else {{ beepOk(); avisoMovil((d.tipo_identificador || 'Identificador') + ' reconocido: ' + (d.nombre || dni), true); }}
         }}else{{
-          if(out) out.value = 'DNI no encontrado';
-          avisoMovil('DNI no encontrado: ' + dni, false);
+          if(out) out.value = 'DNI/CÓDIGO no encontrado';
+          avisoMovil(d.msg || ('DNI/CÓDIGO no encontrado: ' + identificador), false);
         }}
-      }}catch(e){{ avisoMovil('No se pudo validar el DNI.', false); }}
+      }}catch(e){{ avisoMovil('No se pudo validar el DNI/CÓDIGO.', false); }}
       setTimeout(()=>{{ scannerBusy=false; }}, document.getElementById('modo_lote')?.checked ? 350 : 900);
     }}
     async function abrirScannerQR(){{
@@ -4687,6 +4763,9 @@ def consumos():
     (function(){{
       const LS_KEY = 'APB_LOTE_MASIVO_' + (document.querySelector('input[name="fecha"]')?.value || new Date().toISOString().slice(0,10));
       let loteMasivoFix = [];
+      function onlyIdentificador(v){{
+        return String(v || '').trim().toUpperCase().slice(0,120);
+      }}
       function onlyDni(v){{
         const raw = String(v || '').trim();
         const digits = raw.replace(/\D/g,'');
@@ -4727,7 +4806,7 @@ def consumos():
           principal.style.background = has ? '#e0f2fe' : '#fff1f2';
           principal.style.color = has ? '#075985' : '#991b1b';
           const span = principal.querySelector('span');
-          if(span) span.textContent = has ? '📦 Registro masivo automático activo: digita o escanea DNI. Cada trabajador aparecerá abajo antes de guardar.' : '⚠️ Primero coloca RESPONSABLE. El DNI, búsqueda y cámara están bloqueados hasta completar responsable.';
+          if(span) span.textContent = has ? '📦 Registro masivo automático activo: digita o escanea DNI/CÓDIGO. Cada trabajador aparecerá abajo antes de guardar.' : '⚠️ Primero coloca RESPONSABLE. El DNI/CÓDIGO, búsqueda y cámara están bloqueados hasta completar responsable.';
         }}
       }}
       function loadLoteFix(){{
@@ -4797,7 +4876,7 @@ def consumos():
         const indAdd = ensureIndicatorFix(); if(indAdd){{ indAdd.style.display='block'; indAdd.textContent='✅ Guardado temporal en registro masivo: ' + checkedCountFix() + ' marcado(s) / ' + loteMasivoFix.length + ' detectado(s).'; }}
         renderLoteFix(); const inp = document.getElementById('dni_consumo'); const out = document.getElementById('nombre_trabajador'); if(inp) inp.value=''; if(out) out.value=''; setTimeout(()=>inp?.focus(),100); return true;
       }};
-      async function validarDniFix(dni){{ const r = await fetch('/api/trabajador/' + encodeURIComponent(dni) + '?_=' + Date.now(), {{cache:'no-store', credentials:'same-origin'}}); return await r.json(); }}
+      async function validarDniFix(identificador){{ const r = await fetch('/api/trabajador?q=' + encodeURIComponent(onlyIdentificador(identificador)) + '&_=' + Date.now(), {{cache:'no-store', credentials:'same-origin'}}); return await r.json(); }}
       window.buscarTrabajadorConsumo = async function(force=false){{
         const enLote = document.getElementById('modo_lote')?.checked;
         if(!validarResponsableFix()){{
@@ -4810,13 +4889,13 @@ def consumos():
           return;
         }}
         const inp = document.getElementById('dni_consumo'); const out = document.getElementById('nombre_trabajador'); if(!inp || !out) return;
-        const dni = onlyDni(inp.value); inp.value = dni; if(dni.length < 8){{ out.value=''; return; }}
-        out.value='Validando DNI...';
-        try{{ const d = await validarDniFix(dni); if(d && d.ok){{ out.value = d.nombre || ''; const info = document.getElementById('info_trabajador_consumo'); if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(d.nombre||'-')+'</div><div><b>DNI</b><br>'+dni+'</div><div><b>Área</b><br>'+(d.area||'-')+'</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>'; }} if(enLote) window.agregarDniLote(dni, d.nombre || '', d.area || ''); else {{ try{{ beepOk(); }}catch(e){{}} }} }} else {{ out.value='DNI no encontrado'; toastFix('DNI no encontrado: '+dni, false); }} }}catch(e){{ out.value='Error validando DNI'; toastFix('Error consultando trabajador.', false); }}
+        const identificador = onlyIdentificador(inp.value); inp.value = identificador; if(!identificador){{ out.value=''; return; }}
+        out.value='Validando DNI/CÓDIGO...';
+        try{{ const d = await validarDniFix(identificador); if(d && d.ok){{ const dni=d.dni||''; out.value = d.nombre || ''; const info = document.getElementById('info_trabajador_consumo'); if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(d.nombre||'-')+'</div><div><b>DNI</b><br>'+(d.dni||'-')+'</div><div><b>Código</b><br>'+(d.codigo||'-')+'</div><div><b>Área</b><br>'+(d.area||'-')+'</div></div>'; }} if(enLote) window.agregarDniLote(dni, d.nombre || '', d.area || ''); else {{ try{{ beepOk(); }}catch(e){{}} }} }} else {{ out.value='DNI/CÓDIGO no encontrado'; toastFix((d&&d.msg)||('DNI/CÓDIGO no encontrado: '+identificador), false); }} }}catch(e){{ out.value='Error validando DNI/CÓDIGO'; toastFix('Error consultando trabajador.', false); }}
       }};
       window.dniInputHandler = function(){{
         const inp = document.getElementById('dni_consumo'); if(!inp) return;
-        inp.value = onlyDni(inp.value);
+        inp.value = onlyIdentificador(inp.value);
         clearTimeout(window.__fixDniTimer);
         if(inp.value.length > 0 && !responsableFix()){{
           const out = document.getElementById('nombre_trabajador');
@@ -4825,9 +4904,9 @@ def consumos():
           validarResponsableFix();
           return;
         }}
-        if(inp.value.length === 8){{ window.__fixDniTimer = setTimeout(()=>window.buscarTrabajadorConsumo(false), 60); }}
+        if(inp.value.length > 0){{ const espera = /^\d{{8}}$/.test(inp.value) ? 60 : 450; window.__fixDniTimer = setTimeout(()=>window.buscarTrabajadorConsumo(false), espera); }}
       }};
-      window.procesarDniQR = async function(texto){{ if(!validarResponsableFix()) return; const dni = onlyDni(texto); if(dni.length !== 8){{ toastFix('QR/barras inválido: no contiene DNI de 8 dígitos.', false); return; }} const inp = document.getElementById('dni_consumo'); if(inp) inp.value=dni; await window.buscarTrabajadorConsumo(true); }};
+      window.procesarDniQR = async function(texto){{ if(!validarResponsableFix()) return; const identificador = onlyIdentificador(texto); if(!identificador){{ toastFix('QR/barras inválido: no contiene DNI o CÓDIGO.', false); return; }} const inp = document.getElementById('dni_consumo'); if(inp) inp.value=identificador; await window.buscarTrabajadorConsumo(true); }};
       const oldAbrir = window.abrirScannerQR; window.abrirScannerQR = function(){{ if(!validarResponsableFix()) return false; return oldAbrir ? oldAbrir() : false; }};
       window.agregarActualAlLote = async function(){{ if(!validarResponsableFix()) return; await window.buscarTrabajadorConsumo(true); }};
       window.validarAntesEnviar = function(e){{
@@ -4845,7 +4924,7 @@ def consumos():
         if(!p && form){{
           p = document.createElement('div');
           p.id = 'auto_guardado_panel';
-          p.innerHTML = '<div>✅ Registros automáticos guardados: <span id="auto_guardado_count">0</span></div><div class="mini">Cada DNI válido se guarda en CONSUMOS DE LA FECHA y el campo DNI queda limpio para el siguiente.</div>';
+          p.innerHTML = '<div>✅ Registros automáticos guardados: <span id="auto_guardado_count">0</span></div><div class="mini">Cada DNI o CÓDIGO válido se guarda en CONSUMOS DE LA FECHA y el campo queda limpio para el siguiente.</div>';
           const info = document.getElementById('info_trabajador_consumo');
           if(info && info.parentNode) info.parentNode.insertBefore(p, info.nextSibling);
           else form.insertBefore(p, form.firstChild);
@@ -4867,6 +4946,10 @@ def consumos():
         const sin = document.getElementById('fila_sin_registros');
         if(sin) sin.remove();
         tbody.insertAdjacentHTML('afterbegin', rowHtml);
+      }}
+      function mostrarUltimoTrabajadorFix(nombre, dni, codigo){{
+        const el = document.getElementById('ultimo_trabajador_lectura');
+        if(el) el.textContent = 'Último trabajador: ' + (nombre || '-') + (codigo ? ' | Cód. ' + codigo : '') + (dni ? ' | DNI ' + dni : '');
       }}
       async function registrarConsumoAutomaticoFix(dni){{
         if(autoGuardandoFix) return;
@@ -4890,6 +4973,9 @@ def consumos():
             const c = document.getElementById('auto_guardado_count');
             if(c) c.textContent = autoGuardadosFix;
             if(p) p.style.display = 'block';
+            mostrarUltimoTrabajadorFix(data.nombre || '', data.dni || dni, data.codigo || '');
+            const contadorFecha = document.getElementById('contador_lecturas_hoy');
+            if(contadorFecha) contadorFecha.textContent = String(data.total_fecha ?? ((parseInt(contadorFecha.textContent || '0',10) || 0) + 1));
             if(ind){{ ind.style.display='block'; ind.textContent = data.msg || ('✅ Guardado automático: ' + dni); }}
             try{{ beepOk(); }}catch(e){{}}
             toastFix(data.msg || ('Guardado automático: ' + dni), true);
@@ -4916,31 +5002,31 @@ def consumos():
         const inp = document.getElementById('dni_consumo');
         const out = document.getElementById('nombre_trabajador');
         if(!inp || !out) return;
-        const dni = onlyDni(inp.value);
-        inp.value = dni;
-        if(dni.length < 8){{ out.value=''; return; }}
-        out.value='Validando DNI...';
+        const identificador = onlyIdentificador(inp.value);
+        inp.value = identificador;
+        if(!identificador){{ out.value=''; return; }}
+        out.value='Validando DNI/CÓDIGO...';
         try{{
-          const d = await validarDniFix(dni);
+          const d = await validarDniFix(identificador);
           if(d && d.ok){{
             out.value = d.nombre || '';
             const info = document.getElementById('info_trabajador_consumo');
-            if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(d.nombre||'-')+'</div><div><b>DNI</b><br>'+dni+'</div><div><b>Área</b><br>'+(d.area||'-')+'</div><div><b>Estado</b><br><span class="badge ok">Activo</span></div></div>'; }}
-            await registrarConsumoAutomaticoFix(dni);
+            if(info){{ info.style.display='block'; info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><b>Trabajador</b><br>'+(d.nombre||'-')+'</div><div><b>DNI</b><br>'+(d.dni||'-')+'</div><div><b>Código</b><br>'+(d.codigo||'-')+'</div><div><b>Área</b><br>'+(d.area||'-')+'</div></div>'; }}
+            await registrarConsumoAutomaticoFix(d.dni || identificador);
           }}else{{
-            out.value='DNI no encontrado';
-            toastFix('DNI no encontrado: '+dni, false);
+            out.value='DNI/CÓDIGO no encontrado';
+            toastFix((d && d.msg) || ('DNI/CÓDIGO no encontrado: '+identificador), false);
             limpiarDniParaSiguienteFix();
           }}
         }}catch(e){{
-          out.value='Error validando DNI';
+          out.value='Error validando DNI/CÓDIGO';
           toastFix('Error consultando trabajador.', false);
           limpiarDniParaSiguienteFix();
         }}
       }};
       window.dniInputHandler = function(){{
         const inp = document.getElementById('dni_consumo'); if(!inp) return;
-        inp.value = onlyDni(inp.value);
+        inp.value = onlyIdentificador(inp.value);
         clearTimeout(window.__fixDniTimer);
         if(inp.value.length > 0 && !responsableFix()){{
           const out = document.getElementById('nombre_trabajador');
@@ -4949,13 +5035,13 @@ def consumos():
           validarResponsableFix();
           return;
         }}
-        if(inp.value.length === 8){{ window.__fixDniTimer = setTimeout(()=>window.buscarTrabajadorConsumo(false), 80); }}
+        if(inp.value.length > 0){{ const espera = /^\d{{8}}$/.test(inp.value) ? 80 : 450; window.__fixDniTimer = setTimeout(()=>window.buscarTrabajadorConsumo(false), espera); }}
       }};
       window.procesarDniQR = async function(texto){{
         if(!validarResponsableFix()){{ limpiarDniParaSiguienteFix(); return; }}
-        const dni = onlyDni(texto);
-        if(dni.length !== 8){{ toastFix('QR/barras inválido: no contiene DNI de 8 dígitos.', false); return; }}
-        const inp = document.getElementById('dni_consumo'); if(inp) inp.value=dni;
+        const identificador = onlyIdentificador(texto);
+        if(!identificador){{ toastFix('QR/barras inválido: no contiene DNI o CÓDIGO.', false); return; }}
+        const inp = document.getElementById('dni_consumo'); if(inp) inp.value=identificador;
         await window.buscarTrabajadorConsumo(true);
       }};
 
@@ -4967,7 +5053,7 @@ def consumos():
           const b1 = document.querySelector('button[onclick="buscarTrabajadorConsumo(true)"]');
           const b2 = document.getElementById('btn_qr');
           const chk0 = document.getElementById('modo_lote');
-          if(inp){{ inp.placeholder = has ? 'Digite DNI o escanee QR/barras' : 'PRIMERO COLOCA RESPONSABLE'; }}
+          if(inp){{ inp.placeholder = has ? 'Digite DNI/CÓDIGO o escanee QR/barras' : 'PRIMERO COLOCA RESPONSABLE'; }}
           if(b1){{ b1.title = has ? '' : 'Primero coloca RESPONSABLE'; }}
           if(b2){{ b2.title = has ? '' : 'Primero coloca RESPONSABLE'; }}
           if(!has){{
@@ -5026,12 +5112,11 @@ def api_registrar_consumo_auto():
     responsable = clean_text(request.form.get("responsable")).upper()
     if not responsable:
         return jsonify({"ok": False, "msg": "Primero registra el RESPONSABLE antes de detectar DNI."}), 400
-    dni = clean_dni(request.form.get("dni"))
-    if len(dni) != 8:
-        return jsonify({"ok": False, "msg": "DNI inválido. Debe tener 8 dígitos."}), 400
-    trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+    identificador = request.form.get("dni")
+    trabajador, tipo_id, valor_id, error_id = resolver_trabajador(identificador)
     if not trabajador:
-        return jsonify({"ok": False, "msg": f"DNI no encontrado o trabajador inactivo: {dni}"}), 404
+        return jsonify({"ok": False, "msg": error_id or "DNI/CÓDIGO no encontrado o trabajador inactivo."}), 404
+    dni = trabajador["dni"]
     tipo = request.form.get("tipo", "Almuerzo")
     if tipo not in ["Almuerzo"]:
         tipo = "Almuerzo"
@@ -5070,7 +5155,8 @@ def api_registrar_consumo_auto():
     </tr>
     """
     audit_event("REGISTRO_CONSUMO_AUTO", "consumos", row["id"], f"DNI {dni} - responsable {responsable}")
-    return jsonify({"ok": True, "msg": f"✅ Guardado automático: {dni} - {trabajador['nombre']}", "row_html": html, "dni": dni, "nombre": trabajador["nombre"], "area": trabajador["area"], "id": row["id"]})
+    total_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
+    return jsonify({"ok": True, "msg": f"✅ Guardado automático: {dni} - {trabajador['nombre']}", "row_html": html, "dni": dni, "codigo": trabajador["codigo"] or "", "nombre": trabajador["nombre"], "area": trabajador["area"], "tipo_identificador": tipo_id, "id": row["id"], "total_fecha": total_fecha})
 
 
 @app.route("/quitar_consumo", methods=["POST"])
@@ -5255,7 +5341,7 @@ def entregas():
           <input id="responsable_entrega" name="responsable_entrega" placeholder="RESPONSABLE DE ENTREGA" value="{session.get('user','').upper()}" oninput="this.value=this.value.toUpperCase()">
           <label class="label-lote-final" style="grid-column:1/-1">
             <input type="checkbox" id="modo_lote_entrega" checked>
-            Entrega masiva automática: cada DNI válido se ENTREGA al instante y queda listado abajo.
+            Entrega masiva automática: cada DNI o CÓDIGO válido se ENTREGA al instante y queda listado abajo.
           </label>
           <button type="button" class="btn-blue" onclick="buscarTrabajadorEntrega(true)">🔎 Validar / entregar DNI</button>
           <button type="button" class="btn-blue" onclick="window.location.href=window.location.pathname+'?fecha='+encodeURIComponent(document.getElementById('fecha_entrega').value||'')">🔄 Actualizar / refrescar</button>
@@ -5506,6 +5592,7 @@ def trabajadores():
         nombre = clean_text(request.form.get("nombre"))
         empresa = clean_text(request.form.get("empresa")) or "APB SAC"
         planilla = clean_text(request.form.get("planilla")).upper()
+        codigo = clean_codigo(request.form.get("codigo"))
         cargo = clean_text(request.form.get("cargo"))
         area = clean_text(request.form.get("area"))
         if len(dni) != 8 or not nombre:
@@ -5514,11 +5601,11 @@ def trabajadores():
 
         existe = q_one("SELECT id FROM trabajadores WHERE dni=?", (dni,))
         if existe:
-            q_exec("UPDATE trabajadores SET empresa=?,planilla=?,nombre=?,cargo=?,area=?,activo=1,actualizado=CURRENT_TIMESTAMP WHERE dni=?",
-                   (empresa, planilla, nombre, cargo, area, dni))
+            q_exec("UPDATE trabajadores SET empresa=?,planilla=?,codigo=?,nombre=?,cargo=?,area=?,activo=1,actualizado=CURRENT_TIMESTAMP WHERE dni=?",
+                   (empresa, planilla, codigo, nombre, cargo, area, dni))
         else:
-            q_exec("INSERT INTO trabajadores(empresa,planilla,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,1)",
-                   (empresa, planilla, dni, nombre, cargo, area))
+            q_exec("INSERT INTO trabajadores(empresa,planilla,codigo,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,?,1)",
+                   (empresa, planilla, codigo, dni, nombre, cargo, area))
         flash("Trabajador guardado correctamente.", "ok")
         return redirect(url_for("trabajadores"))
 
@@ -5549,7 +5636,7 @@ def trabajadores():
             return redirect(url_for("trabajadores"))
         except Exception as e:
             app.logger.exception("Error importando trabajadores")
-            flash("No se pudo importar trabajadores. El Excel debe tener como mínimo DNI y NOMBRE/TRABAJADOR. También acepta EMPRESA, CARGO y AREA si existen. Detalle: " + str(e)[:180], "error")
+            flash("No se pudo importar trabajadores. El Excel debe tener como mínimo DNI y NOMBRE/TRABAJADOR. También acepta CODIGO, EMPRESA, PLANILLA, CARGO y AREA. Detalle: " + str(e)[:180], "error")
             return redirect(url_for("trabajadores"))
 
     buscar = clean_text(request.args.get("buscar"))
@@ -5561,25 +5648,25 @@ def trabajadores():
         b = f"%{buscar}%"
         rows = q_all("""
             SELECT * FROM trabajadores
-            WHERE dni LIKE ? OR nombre LIKE ? OR cargo LIKE ? OR area LIKE ? OR empresa LIKE ? OR planilla LIKE ?
+            WHERE dni LIKE ? OR codigo LIKE ? OR nombre LIKE ? OR cargo LIKE ? OR area LIKE ? OR empresa LIKE ? OR planilla LIKE ?
             ORDER BY nombre
-        """, (b, b, b, b, b, b))
+        """, (b, b, b, b, b, b, b))
     else:
         rows = q_all("SELECT * FROM trabajadores ORDER BY nombre")
 
     tabla = "".join([
-        f"<tr><td>{r['empresa']}</td><td>{r['planilla'] or '-'}</td><td>{r['dni']}</td><td>{r['nombre']}</td><td>{r['cargo']}</td><td>{r['area']}</td><td><span class='badge ok'>Activo</span></td></tr>"
+        f"<tr><td>{r['empresa']}</td><td>{r['planilla'] or '-'}</td><td>{r['codigo'] or '-'}</td><td>{r['dni']}</td><td>{r['nombre']}</td><td>{r['cargo']}</td><td>{r['area']}</td><td><span class='badge ok'>Activo</span></td></tr>"
         for r in rows
-    ]) or "<tr><td colspan='7'>Sin trabajadores encontrados.</td></tr>"
+    ]) or "<tr><td colspan='8'>Sin trabajadores encontrados.</td></tr>"
 
-    html = topbar("Trabajadores", "Base de trabajadores activos para validar DNI") + f"""
+    html = topbar("Trabajadores", "Base de trabajadores activos para validar por DNI o CÓDIGO") + f"""
     <div class="kpi-grid" style="grid-template-columns:repeat(3,minmax(180px,1fr))!important">
       <div class="card kpi-card">
         <div class="icon-circle ic-green">👥</div>
         <div>
           <div class="label">Trabajadores activos</div>
           <div class="num">{total_activos}</div>
-          <div class="sub">Disponibles para validar DNI</div>
+          <div class="sub">Disponibles para validar DNI/CÓDIGO</div>
         </div>
       </div>
       <div class="card kpi-card">
@@ -5606,6 +5693,7 @@ def trabajadores():
         <input type="hidden" name="manual" value="1">
         <input name="empresa" value="APB SAC" placeholder="Empresa">
         <input name="planilla" placeholder="Planilla">
+        <input name="codigo" placeholder="Código trabajador">
         <input name="dni" placeholder="DNI" required>
         <input name="nombre" placeholder="Apellidos y nombres" required>
         <input name="cargo" placeholder="Cargo">
@@ -5632,14 +5720,14 @@ def trabajadores():
       </div>
 
       <form method="get" action="{url_for('trabajadores')}" class="form-grid" style="grid-template-columns:1fr auto auto;margin-bottom:14px">
-        <input name="buscar" value="{buscar}" placeholder="Buscar por DNI, nombre, cargo, área o empresa">
+        <input name="buscar" value="{buscar}" placeholder="Buscar por DNI, código, nombre, cargo, área o empresa">
         <button class="btn-blue">Buscar</button>
         <a class="btn" href="{url_for('trabajadores')}">Actualizar</a>
       </form>
 
       <div class="table-wrap">
         <table>
-          <tr><th>Empresa</th><th>Planilla</th><th>DNI</th><th>Nombre</th><th>Cargo</th><th>Área</th><th>Estado</th></tr>
+          <tr><th>Empresa</th><th>Planilla</th><th>Código</th><th>DNI</th><th>Nombre</th><th>Cargo</th><th>Área</th><th>Estado</th></tr>
           {tabla}
         </table>
       </div>
@@ -6087,6 +6175,7 @@ def plantilla_trabajadores():
     df = pd.DataFrame([{
         "EMPRESA": "APB SAC",
         "PLANILLA": "GENERAL",
+        "CODIGO": "100001",
         "DNI": "74324033",
         "NOMBRE": "AZABACHE LUJAN, OMAR EDUARDO",
         "CARGO": "OPERARIO",
