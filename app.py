@@ -4168,9 +4168,9 @@ def consumos():
     where = cond
     final_params = list(params)
     if buscar:
-        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR comedor LIKE ? OR responsable LIKE ? OR tipo LIKE ?)"
+        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR comedor LIKE ? OR responsable LIKE ? OR tipo LIKE ? OR dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?))"
         b = f"%{buscar}%"
-        final_params += [b, b, b, b, b, b, b]
+        final_params += [b, b, b, b, b, b, b, b]
 
     rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
     tabla = "".join([
@@ -5141,6 +5141,275 @@ def consumos():
       </div>
     </div>
     """
+    html += r"""
+<style>
+@media (max-width: 768px){
+  #contador_lecturas_box{padding:8px 10px!important;gap:8px!important;grid-template-columns:24px 1fr 58px!important;min-height:auto!important;}
+  #contador_lecturas_box > div:first-child{font-size:18px!important;}
+  #contador_lecturas_box [style*="font-size:15px"]{font-size:11px!important;line-height:1.05!important;}
+  #contador_lecturas_box [style*="font-size:12px"]{font-size:9.5px!important;line-height:1.05!important;}
+  #contador_lecturas_hoy{font-size:20px!important;}
+  #ultimo_trabajador_lectura{font-size:10.5px!important;line-height:1.15!important;margin-top:3px!important;display:block!important;max-height:2.35em!important;overflow:hidden!important;}
+  #info_trabajador_consumo{padding:10px!important;}
+  #info_trabajador_consumo > div{grid-template-columns:1fr 1fr!important;gap:8px!important;}
+  .table-head{display:grid!important;grid-template-columns:1fr!important;gap:10px!important;align-items:stretch!important;}
+  .table-head h3{font-size:15px!important;margin:0!important;}
+  .table-head .btn{width:100%!important;justify-content:center!important;}
+  .filter-grid{display:grid!important;grid-template-columns:1fr 1fr!important;gap:10px!important;}
+  .filter-grid > div:nth-child(3){grid-column:1/-1!important;}
+  .filter-grid > button,.filter-grid > a{width:100%!important;}
+  #qr-reader{width:100%!important;max-width:360px!important;margin:8px auto!important;}
+  .apb-mobile-scan-box{background:#071a2c!important;border:1px solid #1e3a5f!important;border-radius:16px!important;padding:10px!important;overflow:hidden!important;}
+  .apb-mobile-scan-head{display:flex!important;justify-content:space-between!important;align-items:center!important;gap:10px!important;color:#fff!important;font-weight:900!important;margin-bottom:8px!important;}
+  .apb-mobile-scan-video{display:block!important;width:100%!important;max-width:340px!important;height:260px!important;object-fit:cover!important;border-radius:14px!important;background:#000!important;margin:0 auto!important;}
+  .apb-mobile-scan-help{font-size:11px!important;color:#dbeafe!important;text-align:center!important;margin-top:8px!important;line-height:1.25!important;}
+  #qr-reader-live{display:none!important;}
+}
+@media (max-width: 480px){
+  #contador_lecturas_box{padding:7px 8px!important;grid-template-columns:22px 1fr 52px!important;gap:7px!important;}
+  #contador_lecturas_box > div:first-child{font-size:16px!important;}
+  #contador_lecturas_hoy{font-size:18px!important;}
+  #ultimo_trabajador_lectura{font-size:10px!important;}
+  .apb-mobile-scan-video{height:230px!important;max-width:320px!important;}
+}
+</style>
+<script>
+(function(){
+  function safeText(v){ return String(v || '').trim(); }
+  function q(sel, root){ return (root || document).querySelector(sel); }
+  function rows(){ return Array.from(document.querySelectorAll('#tbody_consumos_principal tr')); }
+  function setUltimo(nombre, dni, codigo){
+    const el = document.getElementById('ultimo_trabajador_lectura');
+    if(el){
+      let txt = 'Último trabajador: ' + (nombre || '—');
+      if(codigo) txt += ' | Cód. ' + codigo;
+      if(dni) txt += ' | DNI ' + dni;
+      el.textContent = txt;
+    }
+  }
+  function updateContador(total){
+    const el = document.getElementById('contador_lecturas_hoy');
+    if(el && total !== undefined && total !== null){ el.textContent = String(total); }
+  }
+  function prependRow(html){
+    if(!html) return;
+    const tbody = document.getElementById('tbody_consumos_principal');
+    if(!tbody) return;
+    const sin = document.getElementById('fila_sin_registros');
+    if(sin) sin.remove();
+    tbody.insertAdjacentHTML('afterbegin', html);
+  }
+  function ensureGrupo(){
+    const obs = q('#form_consumo [name="observacion"]');
+    const resp = safeText(q('#form_consumo [name="responsable"]')?.value).toUpperCase();
+    try{
+      if(obs && safeText(obs.value)) localStorage.setItem('apb_ultimo_grupo_consumo', safeText(obs.value).toUpperCase());
+    }catch(e){}
+    if(!obs) return '';
+    let val = safeText(obs.value).toUpperCase();
+    if(!val){
+      try{ val = safeText(localStorage.getItem('apb_ultimo_grupo_consumo')).toUpperCase(); }catch(e){}
+    }
+    if(!val) val = resp || 'REGISTRO MASIVO';
+    obs.value = val;
+    return val;
+  }
+  function renderInfo(data){
+    const out = document.getElementById('nombre_trabajador');
+    const info = document.getElementById('info_trabajador_consumo');
+    if(out){ out.value = data?.nombre || ''; out.title = data?.nombre || ''; }
+    if(info){
+      info.style.display = 'block';
+      info.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px"><div><b>Trabajador</b><br>' + (data?.nombre || '-') + '</div><div><b>DNI</b><br>' + (data?.dni || '-') + '</div><div><b>Código</b><br>' + (data?.codigo || '-') + '</div><div><b>Área</b><br>' + (data?.area || '-') + '</div></div>';
+    }
+  }
+  function clearCapture(keepInfo){
+    const inp = document.getElementById('dni_consumo');
+    const out = document.getElementById('nombre_trabajador');
+    const info = document.getElementById('info_trabajador_consumo');
+    if(inp){ inp.value = ''; setTimeout(()=>inp.focus(), 60); }
+    if(out) out.value = '';
+    if(info && !keepInfo){ info.style.display = 'none'; info.innerHTML = ''; }
+  }
+  async function fetchTrabajador(identificador){
+    const r = await fetch('/api/trabajador?q=' + encodeURIComponent(identificador) + '&_=' + Date.now(), {cache:'no-store', credentials:'same-origin'});
+    return await r.json();
+  }
+  let busyLookup = false;
+  let debounceLookup = null;
+  window.buscarTrabajadorConsumo = async function(force){
+    const inp = document.getElementById('dni_consumo');
+    if(!inp || busyLookup) return;
+    const responsable = safeText(q('#form_consumo [name="responsable"]')?.value).toUpperCase();
+    if(!responsable){
+      if(typeof window.avisoMovil === 'function') window.avisoMovil('Primero coloca RESPONSABLE.', false);
+      clearCapture(false);
+      return;
+    }
+    const identificador = safeText(inp.value).toUpperCase();
+    inp.value = identificador;
+    if(!identificador) return;
+    busyLookup = true;
+    const out = document.getElementById('nombre_trabajador');
+    if(out) out.value = 'Validando...';
+    try{
+      const data = await fetchTrabajador(identificador);
+      if(!data || !data.ok){
+        if(out) out.value = 'No encontrado';
+        if(typeof window.avisoMovil === 'function') window.avisoMovil((data && data.msg) || ('DNI/CÓDIGO no encontrado: ' + identificador), false);
+        return;
+      }
+      renderInfo(data);
+      setUltimo(data.nombre, data.dni, data.codigo);
+      ensureGrupo();
+      const form = document.getElementById('form_consumo');
+      const fd = new FormData(form || document.createElement('form'));
+      fd.set('dni', data.dni || identificador);
+      fd.set('modo_lote', '0');
+      const rr = await fetch('/api/registrar_consumo_auto', {method:'POST', body:fd, credentials:'same-origin', cache:'no-store'});
+      const res = await rr.json().catch(()=>({ok:false, msg:'No se pudo leer la respuesta del servidor'}));
+      if(res.ok){
+        prependRow(res.row_html || '');
+        updateContador(res.total_fecha);
+        setUltimo(res.nombre || data.nombre, res.dni || data.dni, res.codigo || data.codigo);
+        if(typeof window.avisoMovil === 'function') window.avisoMovil(res.msg || 'Guardado automático correcto.', true);
+        clearCapture(false);
+      }else{
+        if(typeof window.avisoMovil === 'function') window.avisoMovil(res.msg || 'No se pudo guardar el consumo.', false);
+      }
+    }catch(e){
+      if(typeof window.avisoMovil === 'function') window.avisoMovil('Error de conexión al validar/guardar.', false);
+    }finally{
+      setTimeout(()=>{ busyLookup = false; }, 180);
+    }
+  };
+  window.dniInputHandler = function(){
+    const inp = document.getElementById('dni_consumo');
+    if(!inp) return;
+    inp.value = safeText(inp.value).toUpperCase();
+    clearTimeout(debounceLookup);
+    if(!inp.value) return;
+    debounceLookup = setTimeout(()=>window.buscarTrabajadorConsumo(false), /^\d{8}$/.test(inp.value) ? 40 : 120);
+  };
+  function filterLocal(){
+    const search = q('.filter-card input[name="buscar"]');
+    const val = safeText(search?.value).toUpperCase();
+    let visibles = 0;
+    rows().forEach(r=>{
+      if(r.id === 'fila_sin_registros') return;
+      const ok = !val || r.innerText.toUpperCase().includes(val);
+      r.style.display = ok ? '' : 'none';
+      if(ok) visibles++;
+    });
+    const sin = document.getElementById('fila_sin_registros');
+    if(sin){
+      sin.style.display = visibles ? 'none' : '';
+      sin.textContent = visibles ? 'Sin registros para este filtro.' : 'Sin registros para este filtro.';
+    }
+  }
+  function initAutoFilter(){
+    const form = q('.filter-card form');
+    if(!form) return;
+    const txt = q('input[name="buscar"]', form);
+    const desde = q('input[name="fecha_inicio"]', form);
+    const hasta = q('input[name="fecha_fin"]', form);
+    let submitTimer = null;
+    const go = function(){
+      clearTimeout(submitTimer);
+      submitTimer = setTimeout(()=>{
+        try{ form.requestSubmit(); }catch(e){ form.submit(); }
+      }, 450);
+    };
+    if(txt){ txt.addEventListener('input', function(){ filterLocal(); go(); }); }
+    if(desde){ desde.addEventListener('change', go); }
+    if(hasta){ hasta.addEventListener('change', go); }
+  }
+
+  let mobileStream = null, mobileRAF = 0, mobileBusy = false;
+  function stopMobileScanner(){
+    try{ if(mobileRAF) cancelAnimationFrame(mobileRAF); }catch(e){}
+    mobileRAF = 0;
+    try{ if(mobileStream) mobileStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+    mobileStream = null;
+    const cont = document.getElementById('qr-reader');
+    if(cont){ cont.style.display = 'none'; cont.innerHTML = ''; }
+  }
+  async function openMobileScanner(){
+    const cont = document.getElementById('qr-reader') || (function(){ const d=document.createElement('div'); d.id='qr-reader'; (document.getElementById('form_consumo') || document.body).appendChild(d); return d; })();
+    cont.style.display = 'block';
+    cont.innerHTML = '<div class="apb-mobile-scan-box"><div class="apb-mobile-scan-head"><span>📷 Cámara QR / Barras</span><button type="button" class="btn-red" style="min-height:0;padding:7px 12px;border-radius:999px" onclick="cerrarScannerQR()">Cerrar</button></div><video id="apb_mobile_video" class="apb-mobile-scan-video" playsinline autoplay muted></video><div class="apb-mobile-scan-help">Apunta el QR o código al centro. Se registrará automáticamente al detectarse.</div></div>';
+    const video = document.getElementById('apb_mobile_video');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    mobileStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    video.srcObject = mobileStream;
+    await video.play();
+    let detector = null;
+    if('BarcodeDetector' in window){
+      try{ detector = new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','upc_a','upc_e','pdf417']}); }catch(e){}
+    }
+    const loop = async function(){
+      if(!mobileStream || mobileBusy) { mobileRAF = requestAnimationFrame(loop); return; }
+      try{
+        let code = '';
+        if(detector){
+          const found = await detector.detect(video);
+          if(found && found.length) code = found[0].rawValue || '';
+        }
+        if(!code && window.jsQR && video.videoWidth > 0){
+          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const foundQR = jsQR(img.data, img.width, img.height);
+          if(foundQR && foundQR.data) code = foundQR.data;
+        }
+        if(code){
+          mobileBusy = true;
+          const inp = document.getElementById('dni_consumo');
+          if(inp) inp.value = safeText(code).toUpperCase();
+          await window.buscarTrabajadorConsumo(true);
+          setTimeout(()=>{ mobileBusy = false; }, 900);
+        }
+      }catch(e){}
+      mobileRAF = requestAnimationFrame(loop);
+    };
+    mobileRAF = requestAnimationFrame(loop);
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    const obs = q('#form_consumo [name="observacion"]');
+    if(obs){
+      try{
+        const last = safeText(localStorage.getItem('apb_ultimo_grupo_consumo')).toUpperCase();
+        if(!safeText(obs.value) && last) obs.value = last;
+      }catch(e){}
+      obs.addEventListener('input', function(){ try{ localStorage.setItem('apb_ultimo_grupo_consumo', safeText(this.value).toUpperCase()); }catch(e){} });
+    }
+    const inp = document.getElementById('dni_consumo');
+    if(inp){
+      inp.addEventListener('input', window.dniInputHandler, true);
+      inp.addEventListener('keyup', window.dniInputHandler, true);
+      inp.addEventListener('change', window.dniInputHandler, true);
+      inp.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); window.buscarTrabajadorConsumo(true); } }, true);
+    }
+    const btn = document.getElementById('btn_qr');
+    const oldDesktopScanner = window.abrirScannerQR;
+    window.cerrarScannerQR = stopMobileScanner;
+    window.abrirScannerQR = async function(){
+      const isMobile = window.matchMedia('(max-width: 768px)').matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+      if(isMobile){
+        try{ await openMobileScanner(); }
+        catch(e){ if(typeof window.avisoMovil === 'function') window.avisoMovil('No se pudo abrir la cámara del celular.', false); }
+        return false;
+      }
+      return oldDesktopScanner ? oldDesktopScanner.apply(this, arguments) : false;
+    };
+    if(btn) btn.onclick = window.abrirScannerQR;
+    initAutoFilter();
+    filterLocal();
+  });
+})();
+</script>
+"""
     return render_page(html, "consumos")
 
 
