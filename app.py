@@ -347,7 +347,7 @@ def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=
         </div>
         <div>
           <label>Buscar</label>
-          <input name="buscar" value="{buscar}" placeholder="DNI, trabajador, área, fundo, comedor...">
+          <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, área, fundo, comedor...">
         </div>
         <button class="btn-blue">🔍 Filtrar</button>
         <a class="btn" href="{action}">Actualizar</a>
@@ -3459,11 +3459,11 @@ document.addEventListener('DOMContentLoaded', function(){
       // Si falta GRUPO/OBSERVACIÓN, mantener visible el trabajador encontrado.
       // La identificación por DNI o CÓDIGO debe funcionar aunque aún no se pueda guardar.
       const form = document.getElementById('form_consumo');
-      const obs = String(form?.querySelector('[name="observacion"]')?.value || '').trim();
+      let obs = String(form?.querySelector('[name="observacion"]')?.value || '').trim();
       if(!obs){
-        const ind = document.getElementById('indicador_masivo_contador');
-        if(ind) ind.textContent = 'Trabajador identificado';
-        return;
+        const obsEl = form?.querySelector('[name="observacion"]');
+        obs = responsableActual() || 'REGISTRO AUTOMATICO';
+        if(obsEl) obsEl.value = obs;
       }
 
       const fd = new FormData(form || document.createElement('form'));
@@ -4089,8 +4089,7 @@ def consumos():
         total = cantidad * precio
         obs = clean_text(request.form.get("observacion")).upper()
         if not obs:
-            flash("La OBSERVACION es obligatoria: REGISTRAR TU GRUPO.", "error")
-            return redirect(url_for("consumos", fecha=fecha))
+            obs = "REGISTRO AUTOMATICO"
         es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
         modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
         if modo_prueba and "[MODO PRUEBA]" not in obs:
@@ -4172,10 +4171,10 @@ def consumos():
         b = f"%{buscar}%"
         final_params += [b, b, b, b, b, b, b, b]
 
-    rows = q_all(f"SELECT * FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
+    rows = q_all(f"SELECT consumos.*, COALESCE((SELECT codigo FROM trabajadores WHERE trabajadores.dni=consumos.dni LIMIT 1),'') AS codigo FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
     tabla = "".join([
         f"""
-        <tr class="fila-db-consumo">
+        <tr class="fila-db-consumo" data-codigo="{r['codigo'] or ''}">
           <td></td>
           <td>{r['fecha']}</td>
           <td>{r['hora']}</td>
@@ -4998,11 +4997,11 @@ def consumos():
         // Primero mostrar/validar al trabajador. Si aún falta GRUPO/OBSERVACIÓN,
         // no borrar el código ni el nombre: el usuario debe poder comprobar
         // visualmente que el CÓDIGO o DNI sí trajo al trabajador correcto.
-        const obs = String(document.querySelector('#form_consumo [name="observacion"]')?.value || '').trim();
+        let obs = String(document.querySelector('#form_consumo [name="observacion"]')?.value || '').trim();
         if(!obs){{
-          const ind = ensureIndicatorFix();
-          if(ind){{ ind.style.display='block'; ind.textContent='✅ Trabajador identificado. Completa GRUPO OBLIGATORIO para guardar el consumo.'; }}
-          return;
+          const obsEl = document.querySelector('#form_consumo [name="observacion"]');
+          obs = responsableFix() || 'REGISTRO AUTOMATICO';
+          if(obsEl) obsEl.value = obs;
         }}
         autoGuardandoFix = true;
         const ind = ensureIndicatorFix();
@@ -5410,11 +5409,235 @@ def consumos():
 })();
 </script>
 """
+    html += r"""
+<style>
+/* ===== AJUSTE DEFINITIVO CONSUMOS PC + CELULAR ===== */
+@media (max-width: 768px){
+  #indicador_masivo_principal{padding:9px 10px!important;margin:5px 0 8px!important;font-size:11px!important;line-height:1.15!important;border-radius:12px!important;}
+  #indicador_masivo_principal > span:first-child{flex:1 1 100%!important;}
+  #indicador_masivo_contador{padding:5px 9px!important;font-size:10px!important;}
+  #contador_lecturas_box{padding:7px 8px!important;gap:7px!important;grid-template-columns:22px 1fr 52px!important;min-height:56px!important;margin:4px 0 8px!important;border-radius:12px!important;}
+  #contador_lecturas_box > div:first-child{font-size:16px!important;}
+  #contador_lecturas_box [style*="font-size:15px"]{font-size:10.5px!important;line-height:1.05!important;}
+  #contador_lecturas_box [style*="font-size:12px"]{font-size:9px!important;line-height:1.05!important;}
+  #contador_lecturas_hoy{font-size:18px!important;}
+  #contador_lecturas_box > div:last-child{min-width:46px!important;padding:5px 6px!important;border-radius:11px!important;}
+  #ultimo_trabajador_lectura{font-size:10px!important;line-height:1.12!important;margin-top:2px!important;max-height:2.4em!important;overflow:hidden!important;}
+  #info_trabajador_consumo{padding:8px!important;font-size:12px!important;margin-top:2px!important;}
+  #info_trabajador_consumo > div{grid-template-columns:1fr 1fr!important;gap:7px!important;}
+  .filter-grid{grid-template-columns:1fr 1fr!important;gap:8px!important;}
+  .filter-grid > div:nth-child(3){grid-column:1/-1!important;}
+  .filter-grid > button,.filter-grid > a{min-height:44px!important;}
+  .table-head{display:grid!important;grid-template-columns:1fr!important;gap:9px!important;}
+  .table-head h3{margin:0!important;font-size:15px!important;}
+  .table-head .btn{width:100%!important;justify-content:center!important;}
+
+  #qr-reader{width:100%!important;max-width:350px!important;margin:8px auto!important;padding:0!important;background:transparent!important;}
+  .apb-scan-box{background:#071a2c!important;border:1px solid #24445e!important;border-radius:15px!important;padding:9px!important;box-shadow:0 8px 20px rgba(0,0,0,.18)!important;}
+  .apb-scan-head{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;color:#fff!important;font-weight:900!important;font-size:14px!important;margin-bottom:8px!important;}
+  .apb-scan-video{display:block!important;width:100%!important;height:225px!important;object-fit:cover!important;border-radius:12px!important;background:#111!important;margin:0 auto!important;}
+  .apb-scan-help{font-size:10.5px!important;line-height:1.2!important;text-align:center!important;color:#dbeafe!important;margin-top:7px!important;}
+
+  /* Tabla -> tarjetas móviles, evita el bloque blanco/horizontal enorme */
+  #tabla_consumos_principal{display:block!important;width:100%!important;min-width:0!important;}
+  #tabla_consumos_principal thead{display:none!important;}
+  #tabla_consumos_principal tbody{display:block!important;width:100%!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo{display:block!important;width:100%!important;background:#fff!important;border:1px solid #dbe5ef!important;border-radius:13px!important;margin:0 0 10px!important;padding:7px!important;box-shadow:0 4px 12px rgba(15,23,42,.06)!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td{display:grid!important;grid-template-columns:96px minmax(0,1fr)!important;gap:8px!important;align-items:center!important;width:100%!important;box-sizing:border-box!important;padding:5px 7px!important;border:0!important;border-bottom:1px solid #eef2f7!important;white-space:normal!important;overflow-wrap:anywhere!important;font-size:12px!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td:last-child{border-bottom:0!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td::before{content:attr(data-label);font-weight:900;color:#075985!important;font-size:11px!important;}
+  #tabla_consumos_principal tbody tr#fila_sin_registros{display:block!important;padding:14px!important;}
+  #tabla_consumos_principal tbody tr#fila_sin_registros td{display:block!important;}
+  .table-wrap{overflow:visible!important;max-height:none!important;}
+}
+@media (max-width: 420px){
+  .apb-scan-video{height:205px!important;}
+  #info_trabajador_consumo > div{grid-template-columns:1fr 1fr!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td{grid-template-columns:86px minmax(0,1fr)!important;font-size:11.5px!important;}
+}
+</style>
+<script>
+(function(){
+  const $ = (s,r=document)=>r.querySelector(s);
+  const clean = v=>String(v ?? '').trim().toUpperCase();
+  let busy=false, timer=null, aborter=null, camStream=null, camRaf=0, camBusy=false;
+
+  function shortToast(msg, ok=true){
+    let t=document.getElementById('apb_scan_toast');
+    if(!t){
+      t=document.createElement('div'); t.id='apb_scan_toast';
+      t.style.cssText='position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 10px);z-index:2147483647;padding:10px 12px;border-radius:12px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.28);font-size:13px;pointer-events:none';
+      document.body.appendChild(t);
+    }
+    t.textContent=msg; t.style.background=ok?'#087f3f':'#b42318'; t.style.display='block';
+    clearTimeout(t.__x); t.__x=setTimeout(()=>{t.style.display='none';}, ok?1700:2700);
+  }
+  function beep(ok=true){
+    try{
+      const C=window.AudioContext||window.webkitAudioContext; const c=new C(); const o=c.createOscillator(); const g=c.createGain();
+      o.connect(g); g.connect(c.destination); o.frequency.value=ok?920:280; g.gain.value=.055; o.start(); setTimeout(()=>{o.stop();c.close();}, ok?110:220);
+    }catch(e){}
+    try{ if(navigator.vibrate) navigator.vibrate(ok?65:[90,45,90]); }catch(e){}
+  }
+  function setLast(data){
+    const top=document.getElementById('ultimo_trabajador_lectura');
+    if(top){
+      let x='Último trabajador: '+(data?.nombre||'—');
+      if(data?.codigo) x+=' | Cód. '+data.codigo;
+      if(data?.dni) x+=' | DNI '+data.dni;
+      top.textContent=x;
+    }
+    const name=document.getElementById('nombre_trabajador');
+    if(name){ name.value=data?.nombre||''; name.title=data?.nombre||''; }
+    const info=document.getElementById('info_trabajador_consumo');
+    if(info && data?.nombre){
+      info.style.display='block';
+      info.innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px"><div><b>Trabajador</b><br>'+data.nombre+'</div><div><b>DNI</b><br>'+(data.dni||'-')+'</div><div><b>Código</b><br>'+(data.codigo||'-')+'</div><div><b>Área</b><br>'+(data.area||'-')+'</div></div>';
+    }
+  }
+  function setCount(n){ const c=document.getElementById('contador_lecturas_hoy'); if(c && n!==undefined && n!==null) c.textContent=String(n); }
+  function decorateRows(root=document){
+    const labels=['Sel.','Fecha','Hora','DNI','Trabajador','Área','Tipo','Comedor','Fundo','Responsable','Cant.','P. Unit.','Total','Estado','Quitar'];
+    root.querySelectorAll('#tbody_consumos_principal tr.fila-db-consumo').forEach(tr=>{
+      Array.from(tr.children).forEach((td,i)=>td.setAttribute('data-label',labels[i]||''));
+    });
+  }
+  function prependRow(html){
+    if(!html) return;
+    const body=document.getElementById('tbody_consumos_principal'); if(!body) return;
+    const empty=document.getElementById('fila_sin_registros'); if(empty) empty.remove();
+    body.insertAdjacentHTML('afterbegin',html); decorateRows(body);
+  }
+  function filterRows(){
+    const input=$('.filter-card input[name="buscar"]'); const v=clean(input?.value);
+    let visible=0;
+    document.querySelectorAll('#tbody_consumos_principal tr.fila-db-consumo').forEach(tr=>{
+      const hay=(clean(tr.innerText)+' '+clean(tr.dataset.codigo)).includes(v);
+      tr.style.display=(!v||hay)?'':'none'; if(!v||hay) visible++;
+    });
+    const empty=document.getElementById('fila_sin_registros'); if(empty) empty.style.display=visible?'none':'';
+  }
+  function formDataScan(identifier){
+    const form=document.getElementById('form_consumo');
+    const fd=new FormData(form||document.createElement('form'));
+    fd.set('identificador',identifier); fd.set('dni',identifier); fd.set('modo_lote','0');
+    return fd;
+  }
+  async function scan(identifier, force=false){
+    identifier=clean(identifier); if(!identifier||busy) return;
+    const resp=clean($('#form_consumo [name="responsable"]')?.value);
+    if(!resp){ shortToast('Primero coloca RESPONSABLE.',false); return; }
+    busy=true;
+    if(aborter) try{aborter.abort();}catch(e){}
+    aborter=new AbortController();
+    const name=document.getElementById('nombre_trabajador'); if(name) name.value='Validando y registrando...';
+    try{
+      const r=await fetch('/api/consumo_scan',{method:'POST',body:formDataScan(identifier),credentials:'same-origin',cache:'no-store',signal:aborter.signal});
+      const data=await r.json().catch(()=>({ok:false,msg:'Respuesta inválida del servidor'}));
+      if(data?.nombre) setLast(data);
+      if(data?.ok){
+        prependRow(data.row_html||''); setCount(data.total_fecha); beep(true); shortToast('✅ '+(data.nombre||'Consumo guardado'),true);
+        const inp=document.getElementById('dni_consumo'); if(inp){ inp.value=''; setTimeout(()=>inp.focus(),50); }
+        const ind=document.getElementById('indicador_masivo_contador'); if(ind) ind.textContent='Guardado';
+      }else if(data?.duplicado){
+        setCount(data.total_fecha); beep(false); shortToast(data.msg||'Ya registrado.',false);
+        const inp=document.getElementById('dni_consumo'); if(inp){ inp.value=''; setTimeout(()=>inp.focus(),80); }
+      }else{
+        if(name) name.value='No encontrado';
+        if(force) { beep(false); shortToast(data?.msg||'DNI/CÓDIGO no encontrado.',false); }
+      }
+    }catch(e){
+      if(e?.name!=='AbortError'){ if(name) name.value='Error de conexión'; shortToast('Error de conexión al registrar.',false); }
+    }finally{ busy=false; }
+  }
+  function inputHandler(e){
+    const inp=e.currentTarget||document.getElementById('dni_consumo'); if(!inp) return;
+    inp.value=clean(inp.value); clearTimeout(timer); if(!inp.value) return;
+    const delay=/^\d{8}$/.test(inp.value)?35:160;
+    if(inp.value.length<3 && !/^\d{8}$/.test(inp.value)) return;
+    timer=setTimeout(()=>scan(inp.value,false),delay);
+  }
+  function replaceInput(){
+    const old=document.getElementById('dni_consumo'); if(!old) return null;
+    const n=old.cloneNode(true); ['oninput','onkeyup','onchange','onkeydown'].forEach(a=>n.removeAttribute(a)); old.replaceWith(n);
+    n.addEventListener('input',inputHandler);
+    n.addEventListener('paste',()=>setTimeout(()=>{n.value=clean(n.value);scan(n.value,true);},20));
+    n.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();clearTimeout(timer);scan(n.value,true);} });
+    return n;
+  }
+  function replaceSearchButton(){
+    const old=Array.from(document.querySelectorAll('#form_consumo button')).find(b=>/Buscar trabajador/i.test(b.textContent||''));
+    if(!old) return;
+    const n=old.cloneNode(true); n.removeAttribute('onclick'); old.replaceWith(n);
+    n.addEventListener('click',()=>scan(document.getElementById('dni_consumo')?.value,true));
+  }
+  function setupFilter(){
+    const form=$('.filter-card form'); if(!form) return;
+    const old=$('input[name="buscar"]',form);
+    if(old){
+      const n=old.cloneNode(true); old.replaceWith(n); n.addEventListener('input',filterRows);
+    }
+    ['fecha_inicio','fecha_fin'].forEach(k=>{ const el=$(`[name="${k}"]`,form); if(el) el.addEventListener('change',()=>form.submit()); });
+  }
+
+  function stopCamera(){
+    try{ if(camRaf) cancelAnimationFrame(camRaf); }catch(e){} camRaf=0;
+    try{ if(camStream) camStream.getTracks().forEach(t=>t.stop()); }catch(e){} camStream=null;
+    const c=document.getElementById('qr-reader'); if(c){c.style.display='none';c.innerHTML='';}
+  }
+  async function openCamera(){
+    const responsible=clean($('#form_consumo [name="responsable"]')?.value); if(!responsible){shortToast('Primero coloca RESPONSABLE.',false);return;}
+    let c=document.getElementById('qr-reader');
+    if(!c){c=document.createElement('div');c.id='qr-reader';document.getElementById('form_consumo')?.appendChild(c);}
+    c.style.display='block';
+    c.innerHTML='<div class="apb-scan-box"><div class="apb-scan-head"><span>📷 Cámara QR / Barras</span><button type="button" class="btn-red" id="apb_close_cam" style="min-height:0;padding:6px 11px;border-radius:999px">Cerrar</button></div><video id="apb_scan_video" class="apb-scan-video" playsinline autoplay muted></video><div class="apb-scan-help">Apunta el código al centro. Al detectarlo se registra automáticamente y la cámara queda lista para el siguiente.</div></div>';
+    $('#apb_close_cam')?.addEventListener('click',stopCamera);
+    const video=document.getElementById('apb_scan_video');
+    try{
+      camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+      video.srcObject=camStream; await video.play();
+    }catch(e){ stopCamera(); shortToast('No se pudo abrir la cámara. Revisa permisos.',false); return; }
+    let detector=null;
+    if('BarcodeDetector' in window){ try{detector=new BarcodeDetector({formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','upc_a','upc_e','pdf417']});}catch(e){} }
+    const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d',{willReadFrequently:true});
+    const loop=async()=>{
+      if(!camStream){return;}
+      if(!camBusy){
+        try{
+          let code='';
+          if(detector){ const found=await detector.detect(video); if(found?.length) code=found[0].rawValue||''; }
+          if(!code && window.jsQR && video.videoWidth){
+            canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.drawImage(video,0,0,canvas.width,canvas.height);
+            const img=ctx.getImageData(0,0,canvas.width,canvas.height), qr=jsQR(img.data,img.width,img.height); if(qr?.data) code=qr.data;
+          }
+          if(code){ camBusy=true; await scan(code,true); setTimeout(()=>{camBusy=false;},850); }
+        }catch(e){}
+      }
+      camRaf=requestAnimationFrame(loop);
+    };
+    camRaf=requestAnimationFrame(loop);
+  }
+  function replaceCameraButton(){
+    const old=document.getElementById('btn_qr'); if(!old) return;
+    const n=old.cloneNode(true); n.removeAttribute('onclick'); old.replaceWith(n); n.addEventListener('click',openCamera);
+  }
+
+  document.addEventListener('DOMContentLoaded',()=>{
+    replaceInput(); replaceSearchButton(); replaceCameraButton(); setupFilter(); decorateRows(); filterRows();
+    window.buscarTrabajadorConsumo=(force=false)=>scan(document.getElementById('dni_consumo')?.value,!!force);
+    window.dniInputHandler=()=>{};
+    window.abrirScannerQR=openCamera; window.cerrarScannerQR=stopCamera;
+    setTimeout(()=>document.getElementById('dni_consumo')?.focus(),120);
+  });
+})();
+</script>
+"""
     return render_page(html, "consumos")
 
 
 
 @app.route("/api/registrar_consumo_auto", methods=["POST"])
+
 @login_required
 @roles_required("admin", "rrhh", "comedor")
 def api_registrar_consumo_auto():
@@ -5444,7 +5667,7 @@ def api_registrar_consumo_auto():
     total = cantidad * precio
     obs = clean_text(request.form.get("observacion")).upper()
     if not obs:
-        return jsonify({"ok": False, "msg": "La OBSERVACION es obligatoria: REGISTRAR TU GRUPO."}), 400
+        obs = "REGISTRO AUTOMATICO"
     es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
     modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
     if modo_prueba and "[MODO PRUEBA]" not in obs:
@@ -5474,6 +5697,97 @@ def api_registrar_consumo_auto():
     audit_event("REGISTRO_CONSUMO_AUTO", "consumos", row["id"], f"DNI {dni} - responsable {responsable}")
     total_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
     return jsonify({"ok": True, "msg": f"✅ Guardado automático: {dni} - {trabajador['nombre']}", "row_html": html, "dni": dni, "codigo": trabajador["codigo"] or "", "nombre": trabajador["nombre"], "area": trabajador["area"], "tipo_identificador": tipo_id, "id": row["id"], "total_fecha": total_fecha})
+
+
+@app.route("/api/consumo_scan", methods=["POST"])
+@login_required
+@roles_required("admin", "rrhh", "comedor")
+def api_consumo_scan():
+    """Valida DNI/CÓDIGO y registra el consumo en una sola llamada.
+    Diseñado para digitación y cámara móvil rápida.
+    """
+    fecha = validar_fecha_iso(request.form.get("fecha") or hoy_iso(), hoy_iso())
+    if not dia_abierto(fecha):
+        estado = estado_dia(fecha)
+        return jsonify({"ok": False, "msg": f"La fecha {fecha_peru_txt(fecha)} no está ABIERTA (estado: {estado.replace('_',' ')})."}), 400
+
+    bloqueado, msg_bloq = registro_bloqueado()
+    if bloqueado and session.get("role") != "admin":
+        return jsonify({"ok": False, "msg": msg_bloq}), 400
+
+    responsable = clean_text(request.form.get("responsable")).upper()
+    if not responsable:
+        return jsonify({"ok": False, "msg": "Primero coloca RESPONSABLE."}), 400
+
+    identificador = request.form.get("identificador") or request.form.get("dni") or ""
+    trabajador, tipo_id, valor_id, error_id = resolver_trabajador(identificador)
+    if not trabajador:
+        return jsonify({"ok": False, "msg": error_id or "DNI/CÓDIGO no encontrado.", "identificador": valor_id}), 404
+
+    dni = trabajador["dni"]
+    tipo = request.form.get("tipo", "Almuerzo")
+    if tipo not in ["Almuerzo"]:
+        tipo = "Almuerzo"
+    comedor = clean_text(request.form.get("comedor")) or "Comedor 01"
+    fundo = clean_text(request.form.get("fundo")) or "Vivadis"
+    cantidad = int(float(request.form.get("cantidad") or 1))
+    precio = float(request.form.get("precio_unitario") or 6.5)
+    total = cantidad * precio
+    obs = clean_text(request.form.get("observacion")).upper() or "REGISTRO AUTOMATICO"
+    es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
+    modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
+    if modo_prueba and "[MODO PRUEBA]" not in obs:
+        obs = ("[MODO PRUEBA] " + obs).upper()
+
+    duplicado = None
+    if not es_adicional:
+        duplicado = q_one("SELECT * FROM consumos WHERE fecha=? AND dni=? AND COALESCE(adicional,0)=0 ORDER BY id DESC LIMIT 1", (fecha, dni))
+    if duplicado:
+        total_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
+        return jsonify({
+            "ok": False,
+            "duplicado": True,
+            "msg": f"Ya registrado hoy: {trabajador['nombre']} ({dni}) a las {duplicado['hora']}.",
+            "dni": dni,
+            "codigo": trabajador["codigo"] or "",
+            "nombre": trabajador["nombre"],
+            "area": trabajador["area"],
+            "tipo_identificador": tipo_id,
+            "total_fecha": total_fecha,
+        }), 409
+
+    hora = hora_now()
+    try:
+        new_id = q_exec("""
+            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
+    except Exception:
+        return jsonify({"ok": False, "msg": f"No se pudo guardar. El DNI {dni} puede estar duplicado para esta fecha."}), 409
+
+    row = q_one("SELECT * FROM consumos WHERE id=?", (new_id,))
+    row_html = f"""
+    <tr class="fila-db-consumo consumo-recien-guardado" data-codigo="{trabajador['codigo'] or ''}">
+      <td>✅</td><td>{row['fecha']}</td><td>{row['hora']}</td><td>{row['dni']}</td><td>{row['trabajador']}</td><td>{row['area']}</td>
+      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['comedor']}</td><td>{row['fundo']}</td><td>{row['responsable'] or '-'}</td>
+      <td>{row['cantidad']}</td><td>{money(row['precio_unitario'])}</td><td>{money(row['total'])}</td><td><span class="badge warn">{row['estado']}</span></td>
+      <td><form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center"><input type="hidden" name="id" value="{row['id']}"><input name="clave" placeholder="Clave" style="width:85px;padding:8px"><button class="btn-red" style="padding:8px 10px">Quitar</button></form></td>
+    </tr>
+    """
+    total_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
+    audit_event("REGISTRO_CONSUMO_SCAN", "consumos", row["id"], f"{tipo_id} {valor_id} -> DNI {dni} - responsable {responsable}")
+    return jsonify({
+        "ok": True,
+        "msg": f"Guardado: {trabajador['nombre']}",
+        "row_html": row_html,
+        "dni": dni,
+        "codigo": trabajador["codigo"] or "",
+        "nombre": trabajador["nombre"],
+        "area": trabajador["area"],
+        "tipo_identificador": tipo_id,
+        "id": row["id"],
+        "total_fecha": total_fecha,
+    })
 
 
 @app.route("/quitar_consumo", methods=["POST"])
