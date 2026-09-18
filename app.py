@@ -6053,6 +6053,23 @@ def consumos():
       }
     },true);
   }
+  function reordenarConsumosMobile(){
+    const form=document.getElementById('form_consumo');
+    if(!form || window.innerWidth>760) return;
+    const tipoField=document.getElementById('tipo_alimentacion_select')?.closest('.consumo-field');
+    const dniField=form.querySelector('.consumo-field.consumo-dni');
+    const camBtn=document.getElementById('btn_qr');
+    const adicionalLabel=form.querySelector('input[name="adicional"]')?.closest('label');
+    if(tipoField && dniField && tipoField.nextElementSibling!==dniField){
+      tipoField.insertAdjacentElement('afterend', dniField);
+    }
+    if(dniField && camBtn && dniField.nextElementSibling!==camBtn){
+      dniField.insertAdjacentElement('afterend', camBtn);
+    }
+    if(camBtn && adicionalLabel && camBtn.nextElementSibling!==adicionalLabel){
+      camBtn.insertAdjacentElement('afterend', adicionalLabel);
+    }
+  }
   document.addEventListener('DOMContentLoaded',()=>{
     restoreContext();
     replaceInput(); replaceSearchButton(); replaceCameraButton(); setupFilter(); decorateRows(); filterRows();
@@ -6078,7 +6095,9 @@ def consumos():
       try{ const saved=localStorage.getItem('apb_modo_id_consumo'); if(saved==='DNI'||saved==='CODIGO') modoSel.value=saved; }catch(e){}
       modoSel.addEventListener('change',aplicarModo); aplicarModo();
     }
-    setTimeout(()=>document.getElementById('dni_consumo')?.focus(),120);
+    reordenarConsumosMobile();
+    window.addEventListener('resize', reordenarConsumosMobile);
+    setTimeout(()=>{ reordenarConsumosMobile(); document.getElementById('dni_consumo')?.focus(); },120);
   });
 })();
 </script>
