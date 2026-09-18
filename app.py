@@ -515,6 +515,60 @@ def resolver_trabajador(identificador):
     return None, "", codigo or raw, f"DNI/CÓDIGO no encontrado o trabajador inactivo: {codigo or raw}"
 
 
+def resolver_trabajador_modo(identificador, modo="AUTO"):
+    """Resuelve trabajador respetando el modo manual elegido.
+
+    AUTO: comportamiento histórico DNI/CÓDIGO (ideal para cámara/QR).
+    DNI: exige exactamente 8 dígitos y busca solo por DNI.
+    CODIGO: busca solo por código, evitando que una digitación parcial de DNI
+            sea interpretada como código antes de terminar de escribir.
+    """
+    modo = clean_text(modo).upper() or "AUTO"
+    raw = clean_text(identificador)
+    if not raw:
+        return None, "", "", "Ingresa DNI o CÓDIGO."
+
+    if modo == "DNI":
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) != 8:
+            return None, "DNI", digits, "El DNI debe tener exactamente 8 dígitos."
+        t = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (digits,))
+        if t:
+            return t, "DNI", digits, ""
+        return None, "DNI", digits, f"DNI no encontrado o trabajador inactivo: {digits}"
+
+    if modo == "CODIGO":
+        codigo = clean_codigo(raw)
+        if not codigo:
+            return None, "CODIGO", "", "Ingresa CÓDIGO."
+        if re.fullmatch(r"\d+", codigo):
+            rows = q_all(
+                """
+                SELECT * FROM trabajadores
+                WHERE activo=1 AND COALESCE(codigo,'')<>''
+                  AND (codigo=? OR LTRIM(codigo,'0')=LTRIM(?,'0'))
+                ORDER BY id LIMIT 3
+                """,
+                (codigo, codigo),
+            )
+        else:
+            rows = q_all(
+                "SELECT * FROM trabajadores WHERE UPPER(TRIM(codigo))=? AND activo=1 ORDER BY id LIMIT 3",
+                (codigo.upper(),),
+            )
+        unicos, vistos = [], set()
+        for r in rows:
+            if r["id"] not in vistos:
+                vistos.add(r["id"]); unicos.append(r)
+        if len(unicos) == 1:
+            return unicos[0], "CODIGO", codigo, ""
+        if len(unicos) > 1:
+            return None, "CODIGO", codigo, f"Código duplicado/ambiguo en la base: {codigo}."
+        return None, "CODIGO", codigo, f"Código no encontrado o trabajador inactivo: {codigo}"
+
+    return resolver_trabajador(raw)
+
+
 def cfg_get(clave, default=""):
     r = q_one("SELECT valor FROM configuracion WHERE clave=?", (clave,))
     return r["valor"] if r else default
@@ -4340,7 +4394,17 @@ def consumos():
         <div class="consumo-field"><label>LOTE</label><input id="lote_consumo" name="observacion" placeholder="LOTE OBLIGATORIO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}></div>
         <div class="consumo-field"><label>PROVEEDOR</label><select id="proveedor_select" name="proveedor" required {disabled}><option value="">PROVEEDOR / CONCESIONARIO</option>{proveedor_options}</select></div>
         <div class="consumo-field"><label>TIPO CONSUMO</label><select id="tipo_alimentacion_select" name="tipo" required {disabled}><option value="DESAYUNO">DESAYUNO</option><option value="ALMUERZO" selected>ALMUERZO</option><option value="DIETA">DIETA</option><option value="CENA">CENA</option></select></div>
-        <div class="consumo-field consumo-dni"><label>DNI / CÓDIGO</label><input type="tel" id="dni_consumo" name="dni" placeholder="DNI / CÓDIGO / QR" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" enterkeyhint="done" {disabled}></div>
+        <div class="consumo-field consumo-dni">
+          <label>IDENTIFICAR TRABAJADOR</label>
+          <div class="id-entry-wrap">
+            <select id="modo_id_consumo" aria-label="Elegir DNI o código">
+              <option value="CODIGO" selected>CÓDIGO</option>
+              <option value="DNI">DNI</option>
+            </select>
+            <input type="tel" id="dni_consumo" name="dni" placeholder="DIGITA CÓDIGO" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off" enterkeyhint="done" {disabled}>
+          </div>
+          <small class="id-entry-help">CÓDIGO: se valida al dejar de escribir. DNI: espera los 8 dígitos completos.</small>
+        </div>
         <input type="hidden" id="precio_unitario_visible" name="precio_unitario" value="0.0000">
         <button type="button" id="btn_qr" class="btn-blue consumo-camera-btn" {disabled}>📷 Cámara QR / Barras</button>
         <div class="consumo-field consumo-name"><label>TRABAJADOR IDENTIFICADO</label><input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}></div>
@@ -4377,7 +4441,7 @@ def consumos():
         <button type="button" id="btn_submit_consumo" onclick="buscarTrabajadorConsumo(true)" {disabled}>REGISTRAR CONSUMO</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
-      <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. Al digitar el DNI aparecerá automáticamente el nombre del trabajador.</p>
+      <p class="muted small">Regla: no se permiten duplicados por día. Para digitación elige CÓDIGO o DNI; no necesitas presionar “Siguiente”. La cámara detecta automáticamente.</p>
     </div>
     <script>
     let dniTimer = null;
@@ -5562,6 +5626,8 @@ def consumos():
   #info_trabajador_consumo > div{grid-template-columns:1fr 1fr!important;}
   #tabla_consumos_principal tbody tr.fila-db-consumo td{grid-template-columns:86px minmax(0,1fr)!important;font-size:11.5px!important;}
 }
+.id-entry-wrap{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;align-items:center}.id-entry-wrap select,.id-entry-wrap input{width:100%;min-width:0}.id-entry-help{display:block;margin-top:5px;color:#64748b;font-size:11px;font-weight:700}
+@media(max-width:700px){.id-entry-wrap{grid-template-columns:92px minmax(0,1fr);gap:6px}.id-entry-help{font-size:9px}}
 </style>
 <script>
 (function(){
@@ -5573,7 +5639,7 @@ def consumos():
     let t=document.getElementById('apb_scan_toast');
     if(!t){
       t=document.createElement('div'); t.id='apb_scan_toast';
-      t.style.cssText='position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 10px);z-index:2147483647;padding:10px 12px;border-radius:12px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.28);font-size:13px;pointer-events:none';
+      t.style.cssText='position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 92px);z-index:2147483647;padding:10px 12px;border-radius:12px;font-weight:900;color:white;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,.28);font-size:13px;pointer-events:none';
       document.body.appendChild(t);
     }
     t.textContent=msg; t.style.background=ok?'#087f3f':'#b42318'; t.style.display='block';
@@ -5624,13 +5690,15 @@ def consumos():
     });
     const empty=document.getElementById('fila_sin_registros'); if(empty) empty.style.display=visible?'none':'';
   }
-  function formDataScan(identifier){
+  function formDataScan(identifier, source='manual'){
     const form=document.getElementById('form_consumo');
     const fd=new FormData(form||document.createElement('form'));
     fd.set('identificador',identifier); fd.set('dni',identifier); fd.set('modo_lote','0');
+    const modo = source==='scanner' ? 'AUTO' : (document.getElementById('modo_id_consumo')?.value || 'CODIGO');
+    fd.set('modo_identificador', modo);
     return fd;
   }
-  async function scan(identifier, force=false){
+  async function scan(identifier, force=false, source='manual'){
     identifier=clean(identifier); if(!identifier||busy) return;
     const resp=clean($('#form_consumo [name="responsable"]')?.value);
     const sup=clean($('#form_consumo [name="supervisor"]')?.value);
@@ -5641,7 +5709,7 @@ def consumos():
     aborter=new AbortController();
     const name=document.getElementById('nombre_trabajador'); if(name) name.value='Validando y registrando...';
     try{
-      const r=await fetch('/api/consumo_scan',{method:'POST',body:formDataScan(identifier),credentials:'same-origin',cache:'no-store',signal:aborter.signal});
+      const r=await fetch('/api/consumo_scan',{method:'POST',body:formDataScan(identifier,source),credentials:'same-origin',cache:'no-store',signal:aborter.signal});
       const data=await r.json().catch(()=>({ok:false,msg:'Respuesta inválida del servidor'}));
       if(data?.nombre) setLast(data);
       if(data?.ok){
@@ -5650,10 +5718,11 @@ def consumos():
         const ind=document.getElementById('indicador_masivo_contador'); if(ind) ind.textContent='Guardado';
       }else if(data?.duplicado){
         setCount(data.total_fecha); beep(false); shortToast(data.msg||'Ya registrado.',false);
-        const inp=document.getElementById('dni_consumo'); if(inp){ inp.value=''; setTimeout(()=>inp.focus(),80); }
+        const inp=document.getElementById('dni_consumo'); if(inp){ inp.value=''; setTimeout(()=>inp.focus(),120); }
       }else{
         if(name) name.value='No encontrado';
-        if(force) { beep(false); shortToast(data?.msg||'DNI/CÓDIGO no encontrado.',false); }
+        beep(false); shortToast(data?.msg||'DNI/CÓDIGO no encontrado.',false);
+        const inp=document.getElementById('dni_consumo'); if(inp){ inp.value=''; setTimeout(()=>inp.focus(),120); }
       }
     }catch(e){
       if(e?.name!=='AbortError'){ if(name) name.value='Error de conexión'; shortToast('Error de conexión al registrar.',false); }
@@ -5661,18 +5730,28 @@ def consumos():
   }
   function inputHandler(e){
     const inp=e.currentTarget||document.getElementById('dni_consumo'); if(!inp) return;
-    inp.value=clean(inp.value); clearTimeout(timer); if(!inp.value) return;
-    const delay=/^\d{8}$/.test(inp.value)?35:160;
-    if(inp.value.length<3 && !/^\d{8}$/.test(inp.value)) return;
-    timer=setTimeout(()=>scan(inp.value,false),delay);
+    inp.value=String(inp.value||'').replace(/\D/g,'');
+    clearTimeout(timer);
+    if(!inp.value) return;
+    const modo=document.getElementById('modo_id_consumo')?.value||'CODIGO';
+    if(modo==='DNI'){
+      inp.maxLength=8;
+      if(inp.value.length!==8) return;
+      timer=setTimeout(()=>scan(inp.value,false,'manual'),80);
+      return;
+    }
+    // Código: esperar una pausa real de digitación para no capturar un DNI a medio escribir.
+    inp.maxLength=12;
+    if(inp.value.length<3) return;
+    timer=setTimeout(()=>scan(inp.value,false,'manual'),520);
   }
   function replaceInput(){
     const old=document.getElementById('dni_consumo'); if(!old) return null;
     const n=old.cloneNode(true); ['oninput','onkeyup','onchange','onkeydown'].forEach(a=>n.removeAttribute(a)); old.replaceWith(n);
     n.type='tel'; n.setAttribute('inputmode','numeric'); n.setAttribute('pattern','[0-9]*'); n.setAttribute('enterkeyhint','done');
     n.addEventListener('input',inputHandler);
-    n.addEventListener('paste',()=>setTimeout(()=>{n.value=clean(n.value);scan(n.value,true);},20));
-    n.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();clearTimeout(timer);scan(n.value,true);} });
+    n.addEventListener('paste',()=>setTimeout(()=>{n.value=String(n.value||'').replace(/\D/g,'');inputHandler({currentTarget:n});},20));
+    n.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();clearTimeout(timer);scan(n.value,true,'manual');} });
     return n;
   }
   function replaceSearchButton(){
@@ -5726,7 +5805,7 @@ def consumos():
               /* mismo código aún frente a la cámara: no repetir aviso/registro */
             }else{
               lastCamCode=norm; lastCamAt=now; camBusy=true;
-              await scan(norm,true);
+              await scan(norm,true,'scanner');
               setTimeout(()=>{camBusy=false;},CAM_REPEAT_MS);
             }
           }
@@ -5766,14 +5845,14 @@ def consumos():
     }catch(e){ return false; }
   }
   const scanBase=scan;
-  scan=async function(identifier,force=false){
+  scan=async function(identifier,force=false,source='manual'){
     const faltan=faltantesRegistro();
     if(faltan.length){
       if(clean(identifier)) await identificarSinGuardar(identifier);
       if(force) shortToast('Identificado. Para guardar completa: '+faltan.join(', '),false);
       return;
     }
-    return await scanBase(identifier,force);
+    return await scanBase(identifier,force,source);
   };
   function ctxKey(){
     const fecha=$('#form_consumo [name="fecha"]')?.value||'actual';
@@ -5819,12 +5898,28 @@ def consumos():
   document.addEventListener('DOMContentLoaded',()=>{
     restoreContext();
     replaceInput(); replaceSearchButton(); replaceCameraButton(); setupFilter(); decorateRows(); filterRows();
-    window.buscarTrabajadorConsumo=(force=false)=>scan(document.getElementById('dni_consumo')?.value,!!force);
+    window.buscarTrabajadorConsumo=(force=false)=>scan(document.getElementById('dni_consumo')?.value,!!force,'manual');
     window.dniInputHandler=()=>{};
     window.abrirScannerQR=openCamera; window.cerrarScannerQR=stopCamera;
     $('#proveedor_select')?.addEventListener('change',()=>{actualizarPrecio();saveContext();});
     $('#tipo_alimentacion_select')?.addEventListener('change',()=>{actualizarPrecio();saveContext();});
     bindContext(); actualizarPrecio(); saveContext();
+    const modoSel=document.getElementById('modo_id_consumo');
+    const idInp=document.getElementById('dni_consumo');
+    function aplicarModo(){
+      const modo=modoSel?.value||'CODIGO';
+      if(idInp){
+        idInp.value=''; idInp.maxLength=modo==='DNI'?8:12;
+        idInp.placeholder=modo==='DNI'?'DIGITA DNI - 8 DÍGITOS':'DIGITA CÓDIGO';
+        idInp.setAttribute('inputmode','numeric'); idInp.setAttribute('pattern','[0-9]*');
+      }
+      try{localStorage.setItem('apb_modo_id_consumo',modo);}catch(e){}
+      setTimeout(()=>idInp?.focus(),60);
+    }
+    if(modoSel){
+      try{ const saved=localStorage.getItem('apb_modo_id_consumo'); if(saved==='DNI'||saved==='CODIGO') modoSel.value=saved; }catch(e){}
+      modoSel.addEventListener('change',aplicarModo); aplicarModo();
+    }
     setTimeout(()=>document.getElementById('dni_consumo')?.focus(),120);
   });
 })();
@@ -5925,7 +6020,8 @@ def api_consumo_scan():
         return jsonify({"ok": False, "msg": "Primero coloca SUPERVISOR."}), 400
 
     identificador = request.form.get("identificador") or request.form.get("dni") or ""
-    trabajador, tipo_id, valor_id, error_id = resolver_trabajador(identificador)
+    modo_identificador = clean_text(request.form.get("modo_identificador") or "AUTO").upper()
+    trabajador, tipo_id, valor_id, error_id = resolver_trabajador_modo(identificador, modo_identificador)
     if not trabajador:
         return jsonify({"ok": False, "msg": error_id or "DNI/CÓDIGO no encontrado.", "identificador": valor_id}), 404
 
@@ -5995,7 +6091,9 @@ def api_consumo_scan():
         "dni": dni,
         "codigo": trabajador["codigo"] or "",
         "nombre": trabajador["nombre"],
+        "codigo": trabajador["codigo"] or "",
         "area": trabajador["area"],
+        "tipo_identificador": tipo_id,
         "tipo_identificador": tipo_id,
         "proveedor": proveedor,
         "supervisor": supervisor,
@@ -6064,17 +6162,17 @@ def api_entregas_pedidos():
 @roles_required("admin", "rrhh", "comedor")
 def api_entregar_dni_auto():
     fecha = validar_fecha_iso(request.form.get("fecha") or hoy_iso(), hoy_iso())
-    dni = clean_dni(request.form.get("dni"))
+    identificador = request.form.get("identificador") or request.form.get("dni") or ""
+    modo_identificador = clean_text(request.form.get("modo_identificador") or "AUTO").upper()
     responsable = clean_text(request.form.get("responsable") or session.get("user", "")).upper()
     if not dia_abierto(fecha):
         return jsonify({"ok": False, "msg": f"La fecha {fecha_peru_txt(fecha)} no está ABIERTA. No se pueden entregar pedidos."}), 400
     if not responsable:
         return jsonify({"ok": False, "msg": "Primero coloca RESPONSABLE DE ENTREGA."}), 400
-    if len(dni) != 8:
-        return jsonify({"ok": False, "msg": "DNI inválido. Debe tener 8 dígitos."}), 400
-    trabajador = q_one("SELECT * FROM trabajadores WHERE dni=? AND activo=1", (dni,))
+    trabajador, tipo_id, valor_id, error_id = resolver_trabajador_modo(identificador, modo_identificador)
     if not trabajador:
-        return jsonify({"ok": False, "msg": f"DNI no encontrado o trabajador inactivo: {dni}"}), 404
+        return jsonify({"ok": False, "msg": error_id or "DNI/CÓDIGO no encontrado.", "identificador": valor_id}), 404
+    dni = trabajador["dni"]
     pendientes = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? AND estado='PENDIENTE' ORDER BY hora,id", (fecha, dni))
     todos = q_all("SELECT * FROM consumos WHERE fecha=? AND dni=? ORDER BY hora,id", (fecha, dni))
     if not todos:
@@ -6178,28 +6276,30 @@ def entregas():
         """ for i, r in enumerate(pedidos, 1)
     ]) or "<tr><td colspan='9'>Sin pedidos para este DNI en la fecha seleccionada.</td></tr>"
 
-    html = topbar("Entrega de Pedidos", "Lectura individual y masiva por DNI igual que Consumos") + f"""
+    html = topbar("Entrega de Pedidos", "Entrega automática por DNI o CÓDIGO, con sonido y confirmación visual") + f"""
     {aviso_entrega}
     <div class="card">
-      <h3 style="margin-top:0">Entrega rápida por DNI</h3>
+      <h3 style="margin-top:0">Entrega rápida por DNI / CÓDIGO</h3>
       <div class="entrega-pro-panel">
-        <form method="get" class="form-grid two" id="form_entrega_busqueda">
-          <input type="date" id="fecha_entrega" name="fecha" value="{fecha}">
-          <input id="dni_entrega" name="dni" value="{dni}" placeholder="DNI del trabajador" inputmode="numeric" autocomplete="off" maxlength="8" autofocus oninput="dniEntregaHandler()">
-          <input id="nombre_trabajador_entrega" readonly placeholder="Nombre del trabajador" value="{trabajador['nombre'] if trabajador else ''}">
-          <input id="responsable_entrega" name="responsable_entrega" placeholder="RESPONSABLE DE ENTREGA" value="{session.get('user','').upper()}" oninput="this.value=this.value.toUpperCase()">
-          <label class="label-lote-final" style="grid-column:1/-1">
-            <input type="checkbox" id="modo_lote_entrega" checked>
-            Entrega masiva automática: cada DNI o CÓDIGO válido se ENTREGA al instante y queda listado abajo.
-          </label>
-          <button type="button" class="btn-blue" onclick="buscarTrabajadorEntrega(true)">🔎 Validar / entregar DNI</button>
-          <button type="button" class="btn-blue" onclick="window.location.href=window.location.pathname+'?fecha='+encodeURIComponent(document.getElementById('fecha_entrega').value||'')">🔄 Actualizar / refrescar</button>
-          <button type="button" id="btn_qr_entrega" class="btn-orange" onclick="abrirScannerEntrega()">📷 Scanner QR / Barras</button>
-          <button type="button" class="btn-red" onclick="limpiarEntregaRapida()">Limpiar</button>
+        <div id="entrega_resumen_verde" class="entrega-summary-green">
+          <div class="entrega-summary-icon">✅</div>
+          <div class="entrega-summary-main">
+            <div class="entrega-summary-title">ENTREGAS GUARDADAS EN LA FECHA</div>
+            <div class="entrega-summary-sub">Cada DNI o CÓDIGO válido se entrega al instante y queda listo para la siguiente lectura.</div>
+            <div id="entrega_ultimo_trabajador_linea" class="entrega-summary-last">Último trabajador: {ultimo_nombre_entrega}{(' | DNI ' + ultimo_dni_entrega) if ultimo_entregado else ''}</div>
+          </div>
+          <div class="entrega-summary-count"><b id="entrega_auto_count">{entregas_guardadas}</b><span>ENTREG.</span></div>
+        </div>
+        <form method="get" class="form-grid two entrega-quick-form" id="form_entrega_busqueda">
+          <div class="entrega-field"><label>FECHA</label><input type="date" id="fecha_entrega" name="fecha" value="{fecha}"></div>
+          <div class="entrega-field"><label>RESPONSABLE</label><input id="responsable_entrega" name="responsable_entrega" placeholder="RESPONSABLE DE ENTREGA" value="{session.get('user','').upper()}" oninput="this.value=this.value.toUpperCase()"></div>
+          <div class="entrega-field entrega-id-field"><label>IDENTIFICAR TRABAJADOR</label><div class="id-entry-wrap"><select id="modo_id_entrega"><option value="CODIGO" selected>CÓDIGO</option><option value="DNI">DNI</option></select><input type="tel" id="dni_entrega" name="dni" value="" placeholder="DIGITA CÓDIGO" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" autofocus enterkeyhint="done"></div><small class="id-entry-help">No necesitas presionar “Siguiente”. Se procesa automáticamente.</small></div>
+          <div class="entrega-field"><label>TRABAJADOR</label><input id="nombre_trabajador_entrega" readonly placeholder="Nombre automático" value=""></div>
+          <button type="button" id="btn_qr_entrega" class="btn-blue">📷 Scanner QR / Barras</button>
+          <button type="button" class="btn-red" id="btn_limpiar_entrega">Limpiar</button>
         </form>
         {info}
-        <div class="entrega-pro-status">
-          <div>✅ Entregas guardadas: <b id="entrega_auto_count">{entregas_guardadas}</b></div>
+        <div class="entrega-pro-status" style="display:none">
           <div>📌 Último DNI: <b id="entrega_ultimo_dni">{ultimo_dni_entrega}</b></div>
           <div>👤 Último trabajador: <b id="entrega_ultimo_nombre">{ultimo_nombre_entrega}</b></div>
         </div>
@@ -6231,101 +6331,96 @@ def entregas():
         <button name="entregar_seleccionado" value="1">Entregar seleccionado</button>
         <button name="entregar_todos" value="1" class="btn-blue">Entregar todos pendientes</button>
       </form>
-      <p class="muted small">Lectura rápida activa. Al digitar o escanear 8 dígitos, valida el DNI y entrega automáticamente los pendientes.</p>
+      <p class="muted small">Lectura automática activa. Elige CÓDIGO o DNI para digitación; la cámara detecta ambos automáticamente.</p>
     </div>
+    <style>
+    .id-entry-wrap{{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;align-items:center}}
+    .id-entry-wrap select,.id-entry-wrap input{{width:100%;min-width:0}}
+    .id-entry-help{{display:block;margin-top:5px;color:#64748b;font-size:11px;font-weight:700}}
+    .entrega-summary-green{{margin:0 0 12px;padding:12px 14px;border-radius:16px;border:2px solid #16a34a;background:linear-gradient(135deg,#052e16,#064e3b);color:#fff;display:grid;grid-template-columns:32px 1fr 78px;gap:10px;align-items:center;box-shadow:0 10px 24px rgba(22,163,74,.20)}}
+    .entrega-summary-icon{{font-size:25px}}.entrega-summary-title{{font-weight:950;font-size:14px}}.entrega-summary-sub{{font-size:11px;opacity:.9;line-height:1.15}}.entrega-summary-last{{font-size:12px;font-weight:950;color:#dcfce7;margin-top:4px;line-height:1.2}}
+    .entrega-summary-count{{background:#22c55e;color:#052e16;border-radius:15px;padding:8px;text-align:center;font-weight:950}}.entrega-summary-count b{{display:block;font-size:25px;line-height:1}}.entrega-summary-count span{{font-size:9px}}
+    .entrega-field label{{display:block;font-size:11px;font-weight:900;color:#475569;margin:0 0 4px 2px}}.entrega-quick-form{{gap:10px!important}}
+    #estado_entrega_auto{{margin-top:10px}}
+    @media(max-width:700px){{
+      .entrega-summary-green{{grid-template-columns:24px 1fr 58px;padding:8px 9px;gap:7px;border-radius:13px}}.entrega-summary-icon{{font-size:18px}}.entrega-summary-title{{font-size:11px;line-height:1.05}}.entrega-summary-sub{{font-size:9px}}.entrega-summary-last{{font-size:10px;max-height:2.35em;overflow:hidden}}.entrega-summary-count{{padding:6px 5px;border-radius:11px}}.entrega-summary-count b{{font-size:20px}}
+      .entrega-quick-form{{grid-template-columns:1fr 1fr!important}}.entrega-id-field{{grid-column:1/-1!important}}.id-entry-wrap{{grid-template-columns:92px minmax(0,1fr);gap:6px}}.id-entry-help{{font-size:9px}}.entrega-quick-form button{{width:100%!important}}
+      #apb_entrega_toast{{top:calc(env(safe-area-inset-top,0px) + 92px)!important}}
+    }}
+    </style>
     <script>
-    let entregaTimer=null, entregaBusy=false, entregaCount=Number({entregas_guardadas}||0), qrEntrega=null;
-    function onlyDniEntrega(v){{ const d=String(v||'').replace(/\D/g,''); return d.length>8 ? d.slice(-8) : d; }}
-    function entregaToast(msg, ok=true){{
-      const d=document.createElement('div'); d.textContent=msg;
-      d.style.cssText='position:fixed;left:10px;right:10px;top:14px;z-index:999999;padding:13px;border-radius:13px;text-align:center;font-weight:950;color:white;background:'+(ok?'#166534':'#991b1b')+';box-shadow:0 12px 30px rgba(0,0,0,.35)';
-      document.body.appendChild(d); try{{ if(!ok || /GUARD|REGISTR|ENTREG|CORRECT/i.test(String(msg||''))) window.apbPlaySound(ok); }}catch(e){{}} setTimeout(()=>d.remove(), window.apbToastDuration ? window.apbToastDuration(ok) : (ok?5200:7600));
+    let entregaTimer=null, entregaBusy=false, qrEntrega=null, entregaLastScan='', entregaLastScanAt=0;
+    const ENTREGA_REPEAT_MS=4000;
+    const eClean=v=>String(v||'').trim().toUpperCase();
+    function entregaBeep(ok=true){{
+      try{{const C=window.AudioContext||window.webkitAudioContext,c=new C(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=ok?980:260;g.gain.value=.06;o.start();setTimeout(()=>{{o.stop();c.close();}},ok?120:240);}}catch(e){{}}
+      try{{if(navigator.vibrate) navigator.vibrate(ok?70:[100,50,100]);}}catch(e){{}}
     }}
-    function responsableEntrega(){{ return String(document.getElementById('responsable_entrega')?.value||'').trim().toUpperCase(); }}
-    function setEstadoEntrega(msg, ok=true){{ const e=document.getElementById('estado_entrega_auto'); if(e){{ e.style.display='block'; e.style.background=ok?'#dcfce7':'#fee2e2'; e.style.color=ok?'#166534':'#991b1b'; e.textContent=msg; }} }}
-    function limpiarEntregaRapida(){{ const i=document.getElementById('dni_entrega'); const n=document.getElementById('nombre_trabajador_entrega'); if(i){{i.value='';i.focus();}} if(n)n.value=''; setEstadoEntrega('Listo para nueva lectura.', true); }}
-    async function buscarTrabajadorEntrega(force=false){{
-      if(entregaBusy) return;
-      const inp=document.getElementById('dni_entrega'); const nom=document.getElementById('nombre_trabajador_entrega');
-      const fecha=document.getElementById('fecha_entrega')?.value||''; const responsable=responsableEntrega();
-      if(!responsable){{ entregaToast('Primero coloca RESPONSABLE DE ENTREGA.', false); if(inp) inp.value=''; return; }}
-      const dni=onlyDniEntrega(inp?.value||''); if(inp) inp.value=dni; if(dni.length<8) return;
-      entregaBusy=true; if(nom) nom.value='Validando y entregando...'; setEstadoEntrega('⏳ Validando DNI y entregando pedidos pendientes...', true);
+    function entregaToast(msg,ok=true){{
+      let d=document.getElementById('apb_entrega_toast');
+      if(!d){{d=document.createElement('div');d.id='apb_entrega_toast';document.body.appendChild(d);}}
+      d.textContent=msg;
+      d.style.cssText='position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 92px);z-index:2147483647;padding:11px 12px;border-radius:12px;text-align:center;font-weight:950;color:white;background:'+(ok?'#087f3f':'#b42318')+';box-shadow:0 10px 28px rgba(0,0,0,.30);font-size:13px;line-height:1.2;pointer-events:none';
+      clearTimeout(d.__x);d.__x=setTimeout(()=>{{d.style.display='none';}},ok?1900:3000);d.style.display='block';
+    }}
+    function responsableEntrega(){{return eClean(document.getElementById('responsable_entrega')?.value);}}
+    function setEstadoEntrega(msg,ok=true){{const e=document.getElementById('estado_entrega_auto');if(e){{e.style.display='block';e.style.background=ok?'#dcfce7':'#fee2e2';e.style.color=ok?'#166534':'#991b1b';e.textContent=msg;}}}}
+    function limpiarEntradaEntrega(refocus=true){{const i=document.getElementById('dni_entrega'),n=document.getElementById('nombre_trabajador_entrega');if(i)i.value='';if(n)n.value='';if(refocus)setTimeout(()=>i?.focus(),100);}}
+    function aplicarModoEntrega(){{
+      const m=document.getElementById('modo_id_entrega')?.value||'CODIGO',i=document.getElementById('dni_entrega');
+      if(i){{i.value='';i.maxLength=m==='DNI'?8:12;i.placeholder=m==='DNI'?'DIGITA DNI - 8 DÍGITOS':'DIGITA CÓDIGO';i.setAttribute('inputmode','numeric');i.setAttribute('pattern','[0-9]*');}}
+      try{{localStorage.setItem('apb_modo_id_entrega',m);}}catch(e){{}} setTimeout(()=>i?.focus(),60);
+    }}
+    async function procesarEntrega(identifier,source='manual'){{
+      if(entregaBusy)return;
+      identifier=String(identifier||'').replace(/\D/g,''); if(!identifier)return;
+      const responsable=responsableEntrega(); if(!responsable){{entregaBeep(false);entregaToast('Primero coloca RESPONSABLE DE ENTREGA.',false);limpiarEntradaEntrega();return;}}
+      const fecha=document.getElementById('fecha_entrega')?.value||'';
+      const modo=source==='scanner'?'AUTO':(document.getElementById('modo_id_entrega')?.value||'CODIGO');
+      entregaBusy=true; const nom=document.getElementById('nombre_trabajador_entrega'); if(nom)nom.value='Validando y entregando...';
       try{{
-        const fd=new FormData(); fd.append('dni',dni); fd.append('fecha',fecha); fd.append('responsable',responsable);
-        const res=await fetch('/api/entregar_dni_auto', {{method:'POST', body:fd}}); const data=await res.json();
+        const fd=new FormData();fd.append('identificador',identifier);fd.append('dni',identifier);fd.append('modo_identificador',modo);fd.append('fecha',fecha);fd.append('responsable',responsable);
+        const res=await fetch('/api/entregar_dni_auto',{{method:'POST',body:fd,credentials:'same-origin',cache:'no-store'}});const data=await res.json().catch(()=>({{ok:false,msg:'Respuesta inválida del servidor'}}));
         if(data.ok){{
-          if(nom) nom.value=data.nombre||''; entregaCount = Number(data.total_entregados_dia || (entregaCount + Number(data.entregados||1)));
-          document.getElementById('entrega_auto_count').textContent=entregaCount;
-          document.getElementById('entrega_ultimo_dni').textContent=data.ultimo_dni||data.dni||dni;
-          document.getElementById('entrega_ultimo_nombre').textContent=data.ultimo_nombre||data.nombre||'-';
-          const body=document.getElementById('pedidos_body'); if(body && data.row_html) body.innerHTML=data.row_html;
-          const cont=document.getElementById('contador_pedidos'); if(cont) cont.textContent=(data.count||0)+' pedido(s)';
-          setEstadoEntrega(data.msg, true); entregaToast(data.msg, true);
-        }}else{{ if(nom) nom.value=''; setEstadoEntrega(data.msg||'No se pudo entregar.', false); entregaToast(data.msg||'No se pudo entregar.', false); }}
-      }}catch(e){{ setEstadoEntrega('Error de conexión al entregar.', false); entregaToast('Error de conexión al entregar.', false); }}
-      finally{{ setTimeout(()=>{{ entregaBusy=false; if(inp){{ inp.value=''; inp.focus(); }} }},220); }}
+          if(nom)nom.value=data.nombre||'';
+          const count=document.getElementById('entrega_auto_count');if(count)count.textContent=String(data.total_entregados_dia??0);
+          const line=document.getElementById('entrega_ultimo_trabajador_linea');if(line)line.textContent='Último trabajador: '+(data.nombre||'-')+(data.codigo?' | Cód. '+data.codigo:'')+(data.dni?' | DNI '+data.dni:'');
+          const d1=document.getElementById('entrega_ultimo_dni');if(d1)d1.textContent=data.dni||'-';const n1=document.getElementById('entrega_ultimo_nombre');if(n1)n1.textContent=data.nombre||'-';
+          const body=document.getElementById('pedidos_body');if(body&&data.row_html)body.innerHTML=data.row_html;const cont=document.getElementById('contador_pedidos');if(cont)cont.textContent=(data.count||0)+' pedido(s)';
+          setEstadoEntrega(data.msg||'Entrega realizada.',true);entregaBeep(true);entregaToast(data.msg||'Entrega realizada.',true);limpiarEntradaEntrega();
+        }}else{{
+          if(nom)nom.value='';setEstadoEntrega(data.msg||'No se pudo entregar.',false);entregaBeep(false);entregaToast(data.msg||'No se pudo entregar.',false);limpiarEntradaEntrega();
+        }}
+      }}catch(e){{if(nom)nom.value='';setEstadoEntrega('Error de conexión al entregar.',false);entregaBeep(false);entregaToast('Error de conexión al entregar.',false);limpiarEntradaEntrega();}}
+      finally{{setTimeout(()=>{{entregaBusy=false;}},180);}}
     }}
-    function dniEntregaHandler(){{ const inp=document.getElementById('dni_entrega'); if(!inp) return; inp.value=onlyDniEntrega(inp.value); clearTimeout(entregaTimer); if(inp.value.length===8) entregaTimer=setTimeout(()=>buscarTrabajadorEntrega(false),70); }}
-    async function refrescarEntregas(){{
-      const dni=document.getElementById('dni_entrega')?.value||''; const fecha=document.getElementById('fecha_entrega')?.value||'';
-      try{{ const res=await fetch(`/api/entregas_pedidos?dni=${{encodeURIComponent(dni)}}&fecha=${{encodeURIComponent(fecha)}}`); const data=await res.json(); const body=document.getElementById('pedidos_body'); const contador=document.getElementById('contador_pedidos'); if(contador) contador.textContent=`${{data.count}} pedido(s)`; if(!body) return; if(!data.pedidos||data.pedidos.length===0){{ body.innerHTML='<tr><td colspan="9">Sin pedidos para este DNI en la fecha seleccionada.</td></tr>'; return; }} body.innerHTML=data.pedidos.map(p=>`<tr><td><input type="checkbox" name="ids" value="${{p.id}}" ${{p.pendiente?'checked':'disabled'}}></td><td>${{p.n}}</td><td>${{p.hora}}</td><td>${{p.dni||dni||'-'}}</td><td>${{p.trabajador||'-'}}</td><td>${{p.tipo}}</td><td>${{p.cantidad}}</td><td>${{p.observacion}}</td><td><span class="badge ${{p.estado==='ENTREGADO'?'ok':'warn'}}">${{p.estado}}</span></td></tr>`).join(''); }}catch(e){{console.warn(e)}}
+    function entregaInputHandler(){{
+      const i=document.getElementById('dni_entrega');if(!i)return;i.value=String(i.value||'').replace(/\D/g,'');clearTimeout(entregaTimer);if(!i.value)return;
+      const m=document.getElementById('modo_id_entrega')?.value||'CODIGO';
+      if(m==='DNI'){{if(i.value.length!==8)return;entregaTimer=setTimeout(()=>procesarEntrega(i.value,'manual'),80);return;}}
+      if(i.value.length<3)return;entregaTimer=setTimeout(()=>procesarEntrega(i.value,'manual'),520);
     }}
+    function limpiarEntregaRapida(){{limpiarEntradaEntrega();setEstadoEntrega('Listo para nueva lectura.',true);}}
     async function abrirScannerEntrega(){{
-      const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='block';
-      const reader=document.getElementById('qr_entrega_reader');
-      if(reader) reader.innerHTML='<div style="text-align:center;font-weight:900">📷 Activando cámara...</div><div id="qr_entrega_live" style="width:100%;max-width:360px;margin:auto"></div><video id="qr_entrega_video" playsinline muted autoplay style="display:none;width:100%;max-width:360px;border-radius:14px;margin:auto"></video><canvas id="qr_entrega_canvas" style="display:none"></canvas>';
-      try{{ cerrarScannerEntrega(false); }}catch(e){{}}
+      const box=document.getElementById('qr_entrega_box');if(box)box.style.display='block';const reader=document.getElementById('qr_entrega_reader');
+      if(reader)reader.innerHTML='<div id="qr_entrega_live" style="width:100%;max-width:340px;margin:auto"></div><video id="qr_entrega_video" playsinline muted autoplay style="display:none;width:100%;max-width:340px;height:240px;object-fit:cover;border-radius:14px;margin:auto"></video><canvas id="qr_entrega_canvas" style="display:none"></canvas>';
+      try{{cerrarScannerEntrega(false);}}catch(e){{}}
       if(typeof Html5Qrcode!=='undefined'){{
-        try{{
-          qrEntrega=new Html5Qrcode('qr_entrega_live');
-          await qrEntrega.start(
-            {{facingMode:{{ideal:'environment'}}}},
-            {{fps:15, qrbox:{{width:230,height:230}}, rememberLastUsedCamera:true}},
-            async txt=>{{ const dni=onlyDniEntrega(txt); if(dni.length===8){{ document.getElementById('dni_entrega').value=dni; await buscarTrabajadorEntrega(true); }} }}
-          );
-          entregaToast('Cámara de entregas activada.', true);
-          return;
-        }}catch(e){{ console.warn('html5-qrcode entrega falló, usando cámara nativa', e); }}
+        try{{qrEntrega=new Html5Qrcode('qr_entrega_live');await qrEntrega.start({{facingMode:{{ideal:'environment'}}}},{{fps:15,qrbox:{{width:220,height:180}},rememberLastUsedCamera:true}},async txt=>{{const id=String(txt||'').replace(/\D/g,'');const now=Date.now();if(!id)return;if(id===entregaLastScan&&(now-entregaLastScanAt)<ENTREGA_REPEAT_MS)return;entregaLastScan=id;entregaLastScanAt=now;await procesarEntrega(id,'scanner');}});entregaToast('Cámara de entregas activada.',true);return;}}catch(e){{console.warn(e);}}
       }}
       try{{
-        const video=document.getElementById('qr_entrega_video'); const canvas=document.getElementById('qr_entrega_canvas');
-        const live=document.getElementById('qr_entrega_live'); if(live) live.innerHTML='<b>Respaldo con cámara nativa...</b>';
-        const stream=await navigator.mediaDevices.getUserMedia({{video:{{facingMode:{{ideal:'environment'}}}}, audio:false}});
-        video.srcObject=stream; video.style.display='block'; await video.play();
-        qrEntrega={{stream:stream, stopped:false}};
-        let detector=null;
-        if('BarcodeDetector' in window){{ try{{ detector=new BarcodeDetector({{formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','codabar','upc_a','upc_e','pdf417']}}); }}catch(e){{}} }}
-        entregaToast('Cámara de entregas activada.', true);
-        const loop=async()=>{{
-          if(!qrEntrega || qrEntrega.stopped) return;
-          try{{
-            if(detector){{
-              const codes=await detector.detect(video);
-              if(codes && codes.length){{ const dni=onlyDniEntrega(codes[0].rawValue||''); if(dni.length===8){{ document.getElementById('dni_entrega').value=dni; await buscarTrabajadorEntrega(true); }} }}
-            }} else if(window.jsQR && video.videoWidth){{
-              canvas.width=video.videoWidth; canvas.height=video.videoHeight;
-              const ctx=canvas.getContext('2d'); ctx.drawImage(video,0,0,canvas.width,canvas.height);
-              const img=ctx.getImageData(0,0,canvas.width,canvas.height); const code=jsQR(img.data,img.width,img.height);
-              if(code && code.data){{ const dni=onlyDniEntrega(code.data); if(dni.length===8){{ document.getElementById('dni_entrega').value=dni; await buscarTrabajadorEntrega(true); }} }}
-            }}
-          }}catch(e){{}}
-          setTimeout(()=>requestAnimationFrame(loop), 180);
-        }};
-        requestAnimationFrame(loop);
-      }}catch(e){{ entregaToast('No se pudo abrir cámara. Permite cámara, usa Chrome y HTTPS.', false); }}
+        const video=document.getElementById('qr_entrega_video'),canvas=document.getElementById('qr_entrega_canvas'),stream=await navigator.mediaDevices.getUserMedia({{video:{{facingMode:{{ideal:'environment'}}}},audio:false}});video.srcObject=stream;video.style.display='block';await video.play();qrEntrega={{stream,stopped:false}};let detector=null;if('BarcodeDetector'in window){{try{{detector=new BarcodeDetector({{formats:['qr_code','code_128','code_39','ean_13','ean_8','itf','upc_a','upc_e','pdf417']}});}}catch(e){{}}}}
+        const loop=async()=>{{if(!qrEntrega||qrEntrega.stopped)return;try{{let id='';if(detector){{const codes=await detector.detect(video);if(codes?.length)id=String(codes[0].rawValue||'').replace(/\D/g,'');}}if(id){{const now=Date.now();if(id!==entregaLastScan||(now-entregaLastScanAt)>=ENTREGA_REPEAT_MS){{entregaLastScan=id;entregaLastScanAt=now;await procesarEntrega(id,'scanner');}}}}}}catch(e){{}}setTimeout(()=>requestAnimationFrame(loop),180);}};requestAnimationFrame(loop);entregaToast('Cámara de entregas activada.',true);
+      }}catch(e){{entregaToast('No se pudo abrir la cámara. Revisa permisos.',false);}}
     }}
-    function cerrarScannerEntrega(ocultar=true){{
-      try{{
-        if(qrEntrega){{
-          if(typeof qrEntrega.stop==='function'){{ qrEntrega.stop().catch(()=>{{}}).finally(()=>{{ try{{qrEntrega.clear();}}catch(e){{}} }}); }}
-          if(qrEntrega.stream){{ qrEntrega.stopped=true; qrEntrega.stream.getTracks().forEach(t=>t.stop()); }}
-        }}
-      }}catch(e){{}}
-      qrEntrega=null;
-      if(ocultar!==false){{ const box=document.getElementById('qr_entrega_box'); if(box) box.style.display='none'; const reader=document.getElementById('qr_entrega_reader'); if(reader) reader.innerHTML=''; }}
-    }}
-    document.addEventListener('DOMContentLoaded',()=>{{ const r=document.getElementById('responsable_entrega'); const rp=document.getElementById('responsable_entrega_post'); if(r&&rp) r.addEventListener('input',()=>rp.value=r.value.toUpperCase()); }});
+    function cerrarScannerEntrega(ocultar=true){{try{{if(qrEntrega){{if(typeof qrEntrega.stop==='function')qrEntrega.stop().catch(()=>{{}}).finally(()=>{{try{{qrEntrega.clear();}}catch(e){{}}}});if(qrEntrega.stream){{qrEntrega.stopped=true;qrEntrega.stream.getTracks().forEach(t=>t.stop());}}}}}}catch(e){{}}qrEntrega=null;if(ocultar!==false){{const b=document.getElementById('qr_entrega_box');if(b)b.style.display='none';const r=document.getElementById('qr_entrega_reader');if(r)r.innerHTML='';}}}}
+    document.addEventListener('DOMContentLoaded',()=>{{
+      const mode=document.getElementById('modo_id_entrega'),inp=document.getElementById('dni_entrega');try{{const saved=localStorage.getItem('apb_modo_id_entrega');if(mode&&(saved==='DNI'||saved==='CODIGO'))mode.value=saved;}}catch(e){{}}
+      mode?.addEventListener('change',aplicarModoEntrega);aplicarModoEntrega();inp?.addEventListener('input',entregaInputHandler);inp?.addEventListener('paste',()=>setTimeout(entregaInputHandler,20));inp?.addEventListener('keydown',e=>{{if(e.key==='Enter'){{e.preventDefault();clearTimeout(entregaTimer);procesarEntrega(inp.value,'manual');}}}});
+      document.getElementById('btn_qr_entrega')?.addEventListener('click',abrirScannerEntrega);document.getElementById('btn_limpiar_entrega')?.addEventListener('click',limpiarEntregaRapida);
+      const r=document.getElementById('responsable_entrega'),rp=document.getElementById('responsable_entrega_post');if(r&&rp)r.addEventListener('input',()=>rp.value=r.value.toUpperCase());
+      window.abrirScannerEntrega=abrirScannerEntrega;window.cerrarScannerEntrega=cerrarScannerEntrega;window.limpiarEntregaRapida=limpiarEntregaRapida;
+    }});
     </script>
     """
     return render_page(html, "entregas")
