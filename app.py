@@ -4452,7 +4452,7 @@ def consumos():
         </div>
         <input type="hidden" id="precio_unitario_visible" name="precio_unitario" value="0.0000">
         <button type="button" id="btn_qr" class="btn-blue consumo-camera-btn" {disabled}>📷 Cámara QR / Barras</button>
-        {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
+        {('<label class="consumo-adicional" style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div class="consumo-field consumo-name"><label>TRABAJADOR IDENTIFICADO</label><input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}></div>
         <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
         <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px auto;grid-column:1/-1"></div>
@@ -5761,10 +5761,23 @@ def consumos():
   #form_consumo>a.btn{order:13!important;grid-column:1/-1!important;}
   #form_consumo .muted.small{order:14!important;grid-column:1/-1!important;}
 }
+@media (max-width:760px){
+  /* ORDEN FINAL móvil pedido por usuario */
+  #form_consumo .consumo-field.consumo-dni{order:8!important;grid-column:1/-1!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:80px minmax(0,1fr)!important;gap:6px!important;align-items:center!important;}
+  #form_consumo .consumo-field.consumo-dni #modo_id_consumo,
+  #form_consumo .consumo-field.consumo-dni #dni_consumo{min-height:38px!important;height:38px!important;margin:0!important;}
+  #form_consumo .consumo-camera-btn{order:9!important;grid-column:1/2!important;width:100%!important;min-height:38px!important;height:38px!important;margin:0!important;display:flex!important;align-items:center!important;justify-content:center!important;}
+  #form_consumo .consumo-adicional{order:9!important;grid-column:2/3!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:7px!important;min-height:38px!important;height:38px!important;margin:0!important;padding:7px 10px!important;border-radius:11px!important;border:1px solid rgba(148,163,184,.35)!important;white-space:nowrap!important;}
+  #form_consumo .consumo-adicional input{margin:0!important;}
+  #form_consumo .consumo-name{order:10!important;grid-column:1/-1!important;}
+  #form_consumo .label-lote-final{order:11!important;grid-column:1/-1!important;}
+  #btn_submit_consumo{order:12!important;grid-column:1/-1!important;}
+  #form_consumo>a.btn{order:13!important;grid-column:1/-1!important;}
+}
 @media (max-width:420px){
-  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:78px minmax(0,1fr)!important;gap:6px!important;}
-  #form_consumo .consumo-camera-btn{font-size:11.2px!important;}
-  #form_consumo > label:not(.label-lote-final){font-size:10.2px!important;padding:6px 8px!important;gap:6px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:74px minmax(0,1fr)!important;}
+  #form_consumo .consumo-adicional{font-size:10px!important;padding:6px 8px!important;gap:6px!important;}
 }
 
 </style>
@@ -6059,16 +6072,20 @@ def consumos():
     const tipoField=document.getElementById('tipo_alimentacion_select')?.closest('.consumo-field');
     const dniField=form.querySelector('.consumo-field.consumo-dni');
     const camBtn=document.getElementById('btn_qr');
-    const adicionalLabel=form.querySelector('input[name="adicional"]')?.closest('label');
+    const adicionalLabel=form.querySelector('.consumo-adicional');
     const nameField=form.querySelector('.consumo-field.consumo-name');
     const loteLabel=form.querySelector('.label-lote-final');
-    if(tipoField && dniField) tipoField.insertAdjacentElement('afterend', dniField);
-    if(dniField && camBtn) dniField.insertAdjacentElement('afterend', camBtn);
-    if(camBtn && adicionalLabel) camBtn.insertAdjacentElement('afterend', adicionalLabel);
-    if((adicionalLabel || camBtn) && nameField){
-      (adicionalLabel || camBtn).insertAdjacentElement('afterend', nameField);
-    }
-    if(nameField && loteLabel) nameField.insertAdjacentElement('afterend', loteLabel);
+    const submitBtn=document.getElementById('btn_submit_consumo');
+    const refreshBtn=form.querySelector('a.btn');
+    const muted=form.querySelector('.muted.small');
+    if(tipoField && dniField) tipoField.after(dniField);
+    if(dniField && camBtn) dniField.after(camBtn);
+    if(camBtn && adicionalLabel) camBtn.after(adicionalLabel);
+    if((adicionalLabel || camBtn) && nameField) (adicionalLabel || camBtn).after(nameField);
+    if(nameField && loteLabel) nameField.after(loteLabel);
+    if(loteLabel && submitBtn) loteLabel.after(submitBtn);
+    if(submitBtn && refreshBtn) submitBtn.after(refreshBtn);
+    if(refreshBtn && muted) refreshBtn.after(muted);
   }
   document.addEventListener('DOMContentLoaded',()=>{
     restoreContext();
