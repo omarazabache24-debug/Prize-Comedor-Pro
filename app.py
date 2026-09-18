@@ -4452,12 +4452,12 @@ def consumos():
         </div>
         <input type="hidden" id="precio_unitario_visible" name="precio_unitario" value="0.0000">
         <button type="button" id="btn_qr" class="btn-blue consumo-camera-btn" {disabled}>📷 Cámara QR / Barras</button>
+        {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div class="consumo-field consumo-name"><label>TRABAJADOR IDENTIFICADO</label><input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}></div>
         <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
         <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px auto;grid-column:1/-1"></div>
         <input type="hidden" name="cantidad" value="1">
         <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" checked onchange="toggleLote()"> Registro continuo / masivo</label>
-        {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div id="lote_panel" class="lote-dios-panel">
           <div class="lote-dios-head">
             <div>
@@ -6060,15 +6060,15 @@ def consumos():
     const dniField=form.querySelector('.consumo-field.consumo-dni');
     const camBtn=document.getElementById('btn_qr');
     const adicionalLabel=form.querySelector('input[name="adicional"]')?.closest('label');
-    if(tipoField && dniField && tipoField.nextElementSibling!==dniField){
-      tipoField.insertAdjacentElement('afterend', dniField);
+    const nameField=form.querySelector('.consumo-field.consumo-name');
+    const loteLabel=form.querySelector('.label-lote-final');
+    if(tipoField && dniField) tipoField.insertAdjacentElement('afterend', dniField);
+    if(dniField && camBtn) dniField.insertAdjacentElement('afterend', camBtn);
+    if(camBtn && adicionalLabel) camBtn.insertAdjacentElement('afterend', adicionalLabel);
+    if((adicionalLabel || camBtn) && nameField){
+      (adicionalLabel || camBtn).insertAdjacentElement('afterend', nameField);
     }
-    if(dniField && camBtn && dniField.nextElementSibling!==camBtn){
-      dniField.insertAdjacentElement('afterend', camBtn);
-    }
-    if(camBtn && adicionalLabel && camBtn.nextElementSibling!==adicionalLabel){
-      camBtn.insertAdjacentElement('afterend', adicionalLabel);
-    }
+    if(nameField && loteLabel) nameField.insertAdjacentElement('afterend', loteLabel);
   }
   document.addEventListener('DOMContentLoaded',()=>{
     restoreContext();
