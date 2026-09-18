@@ -21,6 +21,7 @@ import re
 import base64
 import sqlite3
 import smtplib
+import json
 from io import BytesIO
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
@@ -34,6 +35,7 @@ from flask import (
     render_template_string, flash, jsonify
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from markupsafe import escape
 
 
 # =========================
@@ -222,6 +224,17 @@ def init_db():
             clave TEXT PRIMARY KEY,
             valor TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS proveedores_comedor (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT UNIQUE NOT NULL,
+            precio_desayuno REAL NOT NULL DEFAULT 0,
+            precio_almuerzo REAL NOT NULL DEFAULT 0,
+            precio_dieta REAL NOT NULL DEFAULT 0,
+            precio_cena REAL NOT NULL DEFAULT 0,
+            activo INTEGER NOT NULL DEFAULT 1,
+            creado TEXT DEFAULT CURRENT_TIMESTAMP,
+            actualizado TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         user_cols = [x["name"] for x in conn.execute("PRAGMA table_info(usuarios)").fetchall()]
         if "password_plain" not in user_cols:
@@ -234,7 +247,7 @@ def init_db():
         # Índice de búsqueda: el código puede venir del ERP/Excel y se usa como identificador alternativo al DNI.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trabajadores_codigo ON trabajadores(codigo)")
         cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
-        for col, sqltype, default in [("comedor", "TEXT", "'Comedor 01'"), ("fundo", "TEXT", "'Kawsay Allpa'"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0"), ("modo_prueba", "INTEGER", "0")]:
+        for col, sqltype, default in [("comedor", "TEXT", "''"), ("fundo", "TEXT", "''"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0"), ("modo_prueba", "INTEGER", "0"), ("proveedor", "TEXT", "''")]:
             if col not in cols:
                 conn.execute(f"ALTER TABLE consumos ADD COLUMN {col} {sqltype} DEFAULT {default}")
         try:
@@ -255,6 +268,23 @@ def init_db():
     for k, v in defaults.items():
         if not q_one("SELECT clave FROM configuracion WHERE clave=?", (k,)):
             q_exec("INSERT INTO configuracion(clave,valor) VALUES(?,?)", (k, v))
+
+    # Catálogo inicial tomado del Excel de precios de setiembre 2026.
+    # Se utiliza NUEVO MONTO X DESCONTAR. Para ALMUERZO genérico se toma
+    # inicialmente ALMUERZO EN CAMPO; luego el administrador puede editarlo.
+    if not q_one("SELECT clave FROM configuracion WHERE clave='proveedores_precios_seed_20260917'"):
+        proveedores_iniciales = [
+            ("AMERICAN CATERING", 7.9532, 9.4754, 9.6300, 9.2158),
+            ("D' ROSSE", 7.9532, 11.3634, 9.6288, 9.2158),
+            ("SRA. AURELIA CHOQUE ARREZALA", 0.0000, 10.6200, 0.0000, 0.0000),
+        ]
+        for nombre, p_des, p_alm, p_die, p_cen in proveedores_iniciales:
+            if not q_one("SELECT id FROM proveedores_comedor WHERE UPPER(TRIM(nombre))=UPPER(TRIM(?))", (nombre,)):
+                q_exec("""
+                    INSERT INTO proveedores_comedor(nombre,precio_desayuno,precio_almuerzo,precio_dieta,precio_cena,activo)
+                    VALUES(?,?,?,?,?,1)
+                """, (nombre, p_des, p_alm, p_die, p_cen))
+        q_exec("INSERT OR REPLACE INTO configuracion(clave,valor) VALUES('proveedores_precios_seed_20260917','1')")
 
     for username, password, role in [("adm", "@123", "admin"), ("adm1", "adm1", "admin"), ("adm2", "adm2", "admin"), ("admin", "admin123", "admin"), ("comedor", "comedor123", "comedor")]:
         existe = q_one("SELECT id FROM usuarios WHERE username=?", (username,))
@@ -347,7 +377,7 @@ def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=
         </div>
         <div>
           <label>Buscar</label>
-          <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, área, fundo, comedor...">
+          <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, cultivo, lote, proveedor...">
         </div>
         <button class="btn-blue">🔍 Filtrar</button>
         <a class="btn" href="{action}">Actualizar</a>
@@ -514,8 +544,42 @@ def opciones_comedor():
     return ["Comedor 01","Comedor 02","Comedor 03","Comedor 03A","Comedor 04","Comedor 04A","Comedor 05","Comedor 06","Comedor 07","Comedor 07A","Comedor 08","Comedor 09"]
 
 def opciones_fundo():
-    # Fundos oficiales según relación enviada
+    # Compatibilidad histórica. La pantalla operativa nueva usa CULTIVO libre.
     return ["Vivadis", "Santa Teresa", "Ayllu Allpa", "Arena Azul"]
+
+
+TIPOS_ALIMENTACION = ["DESAYUNO", "ALMUERZO", "DIETA", "CENA"]
+
+def normalizar_tipo_alimentacion(v):
+    tipo = clean_text(v).upper()
+    aliases = {
+        "ALMUERZO EN CAMPO": "ALMUERZO",
+        "ALMUERZO EN COMEDOR": "ALMUERZO",
+        "ALMUERZO": "ALMUERZO",
+        "DESAYUNO": "DESAYUNO",
+        "DIETA": "DIETA",
+        "CENA": "CENA",
+    }
+    return aliases.get(tipo, "ALMUERZO")
+
+def proveedores_comedor_activos():
+    return q_all("SELECT * FROM proveedores_comedor WHERE activo=1 ORDER BY nombre")
+
+def proveedor_por_nombre(nombre):
+    return q_one("SELECT * FROM proveedores_comedor WHERE UPPER(TRIM(nombre))=UPPER(TRIM(?)) AND activo=1", (clean_text(nombre),))
+
+def precio_por_proveedor_tipo(nombre, tipo):
+    prov = proveedor_por_nombre(nombre)
+    if not prov:
+        return None
+    tipo = normalizar_tipo_alimentacion(tipo)
+    campo = {
+        "DESAYUNO": "precio_desayuno",
+        "ALMUERZO": "precio_almuerzo",
+        "DIETA": "precio_dieta",
+        "CENA": "precio_cena",
+    }[tipo]
+    return float(prov[campo] or 0)
 
 
 def normalize_columns(cols):
@@ -4074,22 +4138,30 @@ def consumos():
             flash(msg, "error")
             return redirect(url_for("consumos", fecha=fecha))
 
-        tipo = request.form.get("tipo", "Almuerzo")
-        if tipo not in ["Almuerzo"]:
-            tipo = "Almuerzo"
-
-        comedor = request.form.get("comedor", "Comedor 01")
-        fundo = request.form.get("fundo", "Kawsay Allpa")
+        tipo = normalizar_tipo_alimentacion(request.form.get("tipo") or "ALMUERZO")
+        proveedor = clean_text(request.form.get("proveedor")).upper()
+        fundo = clean_text(request.form.get("fundo")).upper()  # CULTIVO
         responsable = clean_text(request.form.get("responsable")).upper()
+        obs = clean_text(request.form.get("observacion")).upper()  # LOTE
         if not responsable:
-            flash("El campo RESPONSABLE es obligatorio y debe ir en MAYÚSCULAS.", "error")
+            flash("El campo RESPONSABLE es obligatorio.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
+        if not fundo:
+            flash("El campo CULTIVO es obligatorio.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
+        if not obs:
+            flash("El campo LOTE es obligatorio.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
+        if not proveedor:
+            flash("Selecciona PROVEEDOR / CONCESIONARIO.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
+        precio = precio_por_proveedor_tipo(proveedor, tipo)
+        if precio is None:
+            flash(f"Proveedor no configurado: {proveedor}.", "error")
             return redirect(url_for("consumos", fecha=fecha))
         cantidad = int(float(request.form.get("cantidad") or 1))
-        precio = float(request.form.get("precio_unitario") or 6.5)
         total = cantidad * precio
-        obs = clean_text(request.form.get("observacion")).upper()
-        if not obs:
-            obs = "REGISTRO AUTOMATICO"
+        comedor = ""  # Campo histórico ya no se usa.
         es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
         modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
         if modo_prueba and "[MODO PRUEBA]" not in obs:
@@ -4119,9 +4191,9 @@ def consumos():
                     continue
                 try:
                     q_exec("""
-                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
+                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
                     creados += 1
                 except Exception as e:
                     errores.append(f"{dni}: no se pudo registrar")
@@ -4149,9 +4221,9 @@ def consumos():
 
         try:
             q_exec("""
-                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
+                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
         except Exception:
             flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}.", "error")
             return redirect(url_for("consumos", fecha=fecha))
@@ -4167,9 +4239,9 @@ def consumos():
     where = cond
     final_params = list(params)
     if buscar:
-        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR comedor LIKE ? OR responsable LIKE ? OR tipo LIKE ? OR dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?))"
+        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR observacion LIKE ? OR proveedor LIKE ? OR responsable LIKE ? OR tipo LIKE ? OR dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?))"
         b = f"%{buscar}%"
-        final_params += [b, b, b, b, b, b, b, b]
+        final_params += [b, b, b, b, b, b, b, b, b]
 
     rows = q_all(f"SELECT consumos.*, COALESCE((SELECT codigo FROM trabajadores WHERE trabajadores.dni=consumos.dni LIMIT 1),'') AS codigo FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
     tabla = "".join([
@@ -4182,8 +4254,9 @@ def consumos():
           <td>{r['trabajador']}</td>
           <td>{r['area']}</td>
           <td>{r['tipo']}{' + Adic.' if r['adicional'] else ''}</td>
-          <td>{r['comedor']}</td>
-          <td>{r['fundo']}</td>
+          <td>{r['proveedor'] or '-'}</td>
+          <td>{r['fundo'] or '-'}</td>
+          <td>{r['observacion'] or '-'}</td>
           <td>{r['responsable'] or '-'}</td>
           <td>{r['cantidad']}</td>
           <td>{money(r['precio_unitario'])}</td>
@@ -4198,7 +4271,7 @@ def consumos():
           </td>
         </tr>
         """ for r in rows
-    ]) or "<tr id='fila_sin_registros'><td colspan='15'>Sin registros para este filtro.</td></tr>"
+    ]) or "<tr id='fila_sin_registros'><td colspan='16'>Sin registros para este filtro.</td></tr>"
 
     estado_fecha = estado_dia(fecha)
     fecha_abierta = (estado_fecha == "ABIERTO")
@@ -4220,6 +4293,17 @@ def consumos():
     # Contador visible para registro masivo/lecturas de la fecha consultada.
     # Antes esta variable no existía dentro de /consumos y generaba error 500 al hacer clic en Consumos.
     total_consumos_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
+    proveedores_cfg = proveedores_comedor_activos()
+    proveedor_options = "".join([f'<option value="{escape(p["nombre"])}">{escape(p["nombre"])}</option>' for p in proveedores_cfg])
+    precios_cfg = {
+        p["nombre"]: {
+            "DESAYUNO": float(p["precio_desayuno"] or 0),
+            "ALMUERZO": float(p["precio_almuerzo"] or 0),
+            "DIETA": float(p["precio_dieta"] or 0),
+            "CENA": float(p["precio_cena"] or 0),
+        } for p in proveedores_cfg
+    }
+    precios_cfg_json = json.dumps(precios_cfg, ensure_ascii=False)
 
     html = topbar("Registro y control de consumos", "Registra por digitación, código o lector QR/barras usando DNI o CÓDIGO") + f"""
     {aviso_bloq}
@@ -4246,21 +4330,27 @@ def consumos():
       <form method="post" class="form-grid" id="form_consumo" onsubmit="return validarAntesEnviar(event)">
         <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige la fecha operativa. Puedes registrar si el día está ABIERTO.">
         <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
-        <select id="fundo_select" name="fundo" {disabled}>
-          {''.join([f'<option value="{f}">{f}</option>' for f in opciones_fundo()])}
+        <input id="cultivo_consumo" name="fundo" placeholder="CULTIVO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
+        <input id="lote_consumo" name="observacion" placeholder="LOTE OBLIGATORIO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
+        <select id="proveedor_select" name="proveedor" required {disabled}>
+          <option value="">PROVEEDOR / CONCESIONARIO</option>
+          {proveedor_options}
         </select>
-        <input id="grupo_consumo" name="observacion" placeholder="GRUPO OBLIGATORIO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
-        <input id="comedor_select" name="comedor" placeholder="COMEDOR" value="Comedor 01" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
+        <select id="tipo_alimentacion_select" name="tipo" required {disabled}>
+          <option value="DESAYUNO">DESAYUNO</option>
+          <option value="ALMUERZO" selected>ALMUERZO</option>
+          <option value="DIETA">DIETA</option>
+          <option value="CENA">CENA</option>
+        </select>
+        <input id="precio_unitario_visible" name="precio_unitario" value="0.0000" placeholder="PRECIO" readonly title="Precio según proveedor y tipo de alimentación">
         <input id="dni_consumo" name="dni" placeholder="DNI / CÓDIGO / QR" required autofocus inputmode="text" autocapitalize="characters" maxlength="80" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
         <input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}>
         <button type="button" class="btn-blue" onclick="buscarTrabajadorConsumo(true)" {disabled}>🔎 Buscar trabajador</button>
         <button type="button" id="btn_qr" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Cámara QR / Barras</button>
         <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
         <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px 0;grid-column:1/-1"></div>
-        <input type="hidden" name="tipo" value="Almuerzo">
         <input type="hidden" name="cantidad" value="1">
-        <input type="hidden" name="precio_unitario" value="6.50">
-        <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" checked onchange="toggleLote()"> Registro masivo / lote</label>
+        <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" checked onchange="toggleLote()"> Registro continuo / masivo</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
         <div id="lote_panel" class="lote-dios-panel">
           <div class="lote-dios-head">
@@ -4287,7 +4377,7 @@ def consumos():
         <textarea id="dni_lote" name="dni_lote" placeholder="DNIs validados para lote" style="display:none;grid-column:1/-1;min-height:90px"></textarea>
         <textarea id="lote_detalle" name="lote_detalle" style="display:none"></textarea>
         <textarea id="lote_checked" name="lote_checked" style="display:none"></textarea>
-        <button id="btn_submit_consumo" {disabled}>REGISTRO DE CONSUMO</button>
+        <button type="button" id="btn_submit_consumo" onclick="buscarTrabajadorConsumo(true)" {disabled}>REGISTRAR CONSUMO</button>
         <a class="btn btn-blue" href="{url_for('consumos')}">Actualizar / refrescar</a>
       </form>
       <p class="muted small">Regla: no se permite duplicar DNI para el mismo día. Al digitar el DNI aparecerá automáticamente el nombre del trabajador.</p>
@@ -4428,9 +4518,10 @@ def consumos():
       const fd = new FormData(form || document.createElement('form'));
       const hoy = document.querySelector('input[name="fecha"]')?.value || fechaLocalKey();
       const hora = new Date().toLocaleTimeString('es-PE', {{hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}});
-      const tipo = fd.get('tipo') || 'Almuerzo';
-      const comedor = fd.get('comedor') || 'Comedor 01';
-      const fundo = fd.get('fundo') || 'Kawsay Allpa';
+      const tipo = fd.get('tipo') || 'ALMUERZO';
+      const proveedor = fd.get('proveedor') || '-';
+      const fundo = fd.get('fundo') || '-';
+      const lote = fd.get('observacion') || '-';
       const responsable = (fd.get('responsable') || '').toString().toUpperCase();
       const cant = fd.get('cantidad') || '1';
       const precio = parseFloat(fd.get('precio_unitario') || '6.5') || 0;
@@ -4441,7 +4532,7 @@ def consumos():
           <td><input class="lote-check" type="checkbox" ${{on ? 'checked' : ''}} onchange="toggleCheckLote('${{d}}', this.checked)" title="Marcar/desmarcar antes del registro final"></td>
           <td>${{escHtml(hoy)}}</td><td>${{escHtml(hora)}}</td><td><b>${{escHtml(d)}}</b></td>
           <td>${{escHtml(detalle[d] || 'Trabajador validado')}}</td><td>-</td><td>${{escHtml(tipo)}}</td>
-          <td>${{escHtml(comedor)}}</td><td>${{escHtml(fundo)}}</td><td>${{escHtml(responsable || '-')}}</td>
+          <td>${{escHtml(proveedor)}}</td><td>${{escHtml(fundo)}}</td><td>${{escHtml(lote)}}</td><td>${{escHtml(responsable || '-')}}</td>
           <td>${{escHtml(cant)}}</td><td>S/ ${{precio.toFixed(2)}}</td><td>S/ ${{total}}</td>
           <td><span class="badge ${{on ? 'lote' : 'lote-off'}}">${{on ? 'PENDIENTE LOTE' : 'NO REGISTRAR'}}</span></td>
           <td><button type="button" onclick="quitarDniLote('${{d}}')" class="btn-red" style="min-height:0;padding:7px 10px">Quitar</button></td>
@@ -4898,8 +4989,8 @@ def consumos():
         const form = document.getElementById('form_consumo'); const fd = new FormData(form || document.createElement('form'));
         const fecha = document.querySelector('input[name="fecha"]')?.value || new Date().toISOString().slice(0,10);
         const hora = new Date().toLocaleTimeString('es-PE',{{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}});
-        const tipo = fd.get('tipo') || 'Almuerzo'; const comedor = fd.get('comedor') || 'Comedor 01'; const fundo = fd.get('fundo') || 'Kawsay Allpa'; const responsable = responsableFix() || '-'; const cant = fd.get('cantidad') || '1'; const precio = parseFloat(fd.get('precio_unitario') || '6.5') || 0; const total = ((parseFloat(cant || '1') || 1) * precio).toFixed(2);
-        const html = loteMasivoFix.map((x,i)=>`<tr class="fila-lote-preview ${{x.checked !== false ? '' : 'unchecked'}}"><td><input class="lote-check" type="checkbox" ${{x.checked !== false ? 'checked' : ''}} onchange="toggleCheckLote('${{x.dni}}', this.checked)"></td><td>${{escHtmlFix(fecha)}}</td><td>${{escHtmlFix(hora)}}</td><td><b>${{escHtmlFix(x.dni)}}</b></td><td>${{escHtmlFix(x.nombre || 'Trabajador validado')}}</td><td>${{escHtmlFix(x.area || '-')}}</td><td>${{escHtmlFix(tipo)}}</td><td>${{escHtmlFix(comedor)}}</td><td>${{escHtmlFix(fundo)}}</td><td>${{escHtmlFix(responsable)}}</td><td>${{escHtmlFix(cant)}}</td><td>S/ ${{precio.toFixed(2)}}</td><td>S/ ${{total}}</td><td><span class="badge ${{x.checked !== false ? 'lote' : 'lote-off'}}">${{x.checked !== false ? 'LISTO PARA GUARDAR' : 'NO GUARDAR'}}</span></td><td><button type="button" onclick="quitarDniLote('${{x.dni}}')" class="btn-red" style="min-height:0;padding:7px 10px">Quitar</button></td></tr>`).join('');
+        const tipo = fd.get('tipo') || 'ALMUERZO'; const proveedor = fd.get('proveedor') || '-'; const fundo = fd.get('fundo') || '-'; const lote = fd.get('observacion') || '-'; const responsable = responsableFix() || '-'; const cant = fd.get('cantidad') || '1'; const precio = parseFloat(fd.get('precio_unitario') || '0') || 0; const total = ((parseFloat(cant || '1') || 1) * precio).toFixed(2);
+        const html = loteMasivoFix.map((x,i)=>`<tr class="fila-lote-preview ${{x.checked !== false ? '' : 'unchecked'}}"><td><input class="lote-check" type="checkbox" ${{x.checked !== false ? 'checked' : ''}} onchange="toggleCheckLote('${{x.dni}}', this.checked)"></td><td>${{escHtmlFix(fecha)}}</td><td>${{escHtmlFix(hora)}}</td><td><b>${{escHtmlFix(x.dni)}}</b></td><td>${{escHtmlFix(x.nombre || 'Trabajador validado')}}</td><td>${{escHtmlFix(x.area || '-')}}</td><td>${{escHtmlFix(tipo)}}</td><td>${{escHtmlFix(proveedor)}}</td><td>${{escHtmlFix(fundo)}}</td><td>${{escHtmlFix(lote)}}</td><td>${{escHtmlFix(responsable)}}</td><td>${{escHtmlFix(cant)}}</td><td>S/ ${{precio.toFixed(2)}}</td><td>S/ ${{total}}</td><td><span class="badge ${{x.checked !== false ? 'lote' : 'lote-off'}}">${{x.checked !== false ? 'LISTO PARA GUARDAR' : 'NO GUARDAR'}}</span></td><td><button type="button" onclick="quitarDniLote('${{x.dni}}')" class="btn-red" style="min-height:0;padding:7px 10px">Quitar</button></td></tr>`).join('');
         tbody.insertAdjacentHTML('afterbegin', html);
       }}
       window.toggleCheckLote = function(dni,on){{ dni = onlyDni(dni); const item = loteMasivoFix.find(x => x.dni === dni); if(item) item.checked = !!on; renderLoteFix(); }};
@@ -5132,7 +5223,7 @@ def consumos():
       </div>
       <div class="table-wrap">
         <table id="tabla_consumos_principal">
-          <thead><tr><th>Sel.</th><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Comedor</th><th>Fundo</th><th>Responsable</th><th>Cant.</th><th>P. Unit.</th><th>Total</th><th>Estado</th><th>Quitar</th></tr></thead>
+          <thead><tr><th>Sel.</th><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Proveedor</th><th>Cultivo</th><th>Lote</th><th>Responsable</th><th>Cant.</th><th>P. Unit.</th><th>Total</th><th>Estado</th><th>Quitar</th></tr></thead>
           <tbody id="tbody_consumos_principal">
           {tabla}
           </tbody>
@@ -5409,6 +5500,7 @@ def consumos():
 })();
 </script>
 """
+    html += f'<script>window.APB_PRECIOS_CONFIG = {precios_cfg_json};</script>'
     html += r"""
 <style>
 /* ===== AJUSTE DEFINITIVO CONSUMOS PC + CELULAR ===== */
@@ -5497,7 +5589,7 @@ def consumos():
   }
   function setCount(n){ const c=document.getElementById('contador_lecturas_hoy'); if(c && n!==undefined && n!==null) c.textContent=String(n); }
   function decorateRows(root=document){
-    const labels=['Sel.','Fecha','Hora','DNI','Trabajador','Área','Tipo','Comedor','Fundo','Responsable','Cant.','P. Unit.','Total','Estado','Quitar'];
+    const labels=['Sel.','Fecha','Hora','DNI','Trabajador','Área','Tipo','Proveedor','Cultivo','Lote','Responsable','Cant.','P. Unit.','Total','Estado','Quitar'];
     root.querySelectorAll('#tbody_consumos_principal tr.fila-db-consumo').forEach(tr=>{
       Array.from(tr.children).forEach((td,i)=>td.setAttribute('data-label',labels[i]||''));
     });
@@ -5622,11 +5714,47 @@ def consumos():
     const n=old.cloneNode(true); n.removeAttribute('onclick'); old.replaceWith(n); n.addEventListener('click',openCamera);
   }
 
+  const APB_PRECIOS = window.APB_PRECIOS_CONFIG || {};
+  function actualizarPrecio(){
+    const prov=$('#proveedor_select')?.value||'';
+    const tipo=$('#tipo_alimentacion_select')?.value||'ALMUERZO';
+    const precio=Number(APB_PRECIOS?.[prov]?.[tipo] ?? 0);
+    const p=$('#precio_unitario_visible'); if(p) p.value=precio.toFixed(4);
+  }
+  function faltantesRegistro(){
+    const faltan=[];
+    if(!clean($('#form_consumo [name="responsable"]')?.value)) faltan.push('RESPONSABLE');
+    if(!clean($('#form_consumo [name="fundo"]')?.value)) faltan.push('CULTIVO');
+    if(!clean($('#form_consumo [name="observacion"]')?.value)) faltan.push('LOTE');
+    if(!clean($('#form_consumo [name="proveedor"]')?.value)) faltan.push('PROVEEDOR');
+    return faltan;
+  }
+  async function identificarSinGuardar(identifier){
+    try{
+      const r=await fetch('/api/trabajador?q='+encodeURIComponent(clean(identifier))+'&_='+Date.now(),{cache:'no-store',credentials:'same-origin'});
+      const data=await r.json();
+      if(data?.ok){ setLast(data); return true; }
+      return false;
+    }catch(e){ return false; }
+  }
+  const scanBase=scan;
+  scan=async function(identifier,force=false){
+    const faltan=faltantesRegistro();
+    if(faltan.length){
+      if(clean(identifier)) await identificarSinGuardar(identifier);
+      if(force) shortToast('Identificado. Para guardar completa: '+faltan.join(', '),false);
+      return;
+    }
+    return await scanBase(identifier,force);
+  };
   document.addEventListener('DOMContentLoaded',()=>{
     replaceInput(); replaceSearchButton(); replaceCameraButton(); setupFilter(); decorateRows(); filterRows();
     window.buscarTrabajadorConsumo=(force=false)=>scan(document.getElementById('dni_consumo')?.value,!!force);
     window.dniInputHandler=()=>{};
     window.abrirScannerQR=openCamera; window.cerrarScannerQR=stopCamera;
+    $('#proveedor_select')?.addEventListener('change',actualizarPrecio);
+    $('#tipo_alimentacion_select')?.addEventListener('change',actualizarPrecio);
+    actualizarPrecio();
     setTimeout(()=>document.getElementById('dni_consumo')?.focus(),120);
   });
 })();
@@ -5657,17 +5785,18 @@ def api_registrar_consumo_auto():
     if not trabajador:
         return jsonify({"ok": False, "msg": error_id or "DNI/CÓDIGO no encontrado o trabajador inactivo."}), 404
     dni = trabajador["dni"]
-    tipo = request.form.get("tipo", "Almuerzo")
-    if tipo not in ["Almuerzo"]:
-        tipo = "Almuerzo"
-    comedor = request.form.get("comedor", "Comedor 01")
-    fundo = request.form.get("fundo", "Kawsay Allpa")
-    cantidad = int(float(request.form.get("cantidad") or 1))
-    precio = float(request.form.get("precio_unitario") or 6.5)
-    total = cantidad * precio
+    tipo = normalizar_tipo_alimentacion(request.form.get("tipo") or "ALMUERZO")
+    proveedor = clean_text(request.form.get("proveedor")).upper()
+    fundo = clean_text(request.form.get("fundo")).upper()
     obs = clean_text(request.form.get("observacion")).upper()
-    if not obs:
-        obs = "REGISTRO AUTOMATICO"
+    if not proveedor or not fundo or not obs:
+        return jsonify({"ok": False, "msg": "Completa PROVEEDOR, CULTIVO y LOTE."}), 400
+    precio = precio_por_proveedor_tipo(proveedor, tipo)
+    if precio is None:
+        return jsonify({"ok": False, "msg": f"Proveedor no configurado: {proveedor}."}), 400
+    cantidad = int(float(request.form.get("cantidad") or 1))
+    total = cantidad * precio
+    comedor = ""
     es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
     modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
     if modo_prueba and "[MODO PRUEBA]" not in obs:
@@ -5677,9 +5806,9 @@ def api_registrar_consumo_auto():
     hora = hora_now()
     try:
         new_id = q_exec("""
-            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
+            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
     except Exception:
         return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}."}), 409
     if new_id:
@@ -5689,7 +5818,7 @@ def api_registrar_consumo_auto():
     html = f"""
     <tr class="fila-db-consumo consumo-recien-guardado">
       <td>✅</td><td>{row['fecha']}</td><td>{row['hora']}</td><td>{row['dni']}</td><td>{row['trabajador']}</td><td>{row['area']}</td>
-      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['comedor']}</td><td>{row['fundo']}</td><td>{row['responsable'] or '-'}</td>
+      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['proveedor'] or '-'}</td><td>{row['fundo'] or '-'}</td><td>{row['observacion'] or '-'}</td><td>{row['responsable'] or '-'}</td>
       <td>{row['cantidad']}</td><td>{money(row['precio_unitario'])}</td><td>{money(row['total'])}</td><td><span class="badge warn">{row['estado']}</span></td>
       <td><form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center"><input type="hidden" name="id" value="{row['id']}"><input name="clave" placeholder="Clave" style="width:85px;padding:8px"><button class="btn-red" style="padding:8px 10px">Quitar</button></form></td>
     </tr>
@@ -5725,15 +5854,22 @@ def api_consumo_scan():
         return jsonify({"ok": False, "msg": error_id or "DNI/CÓDIGO no encontrado.", "identificador": valor_id}), 404
 
     dni = trabajador["dni"]
-    tipo = request.form.get("tipo", "Almuerzo")
-    if tipo not in ["Almuerzo"]:
-        tipo = "Almuerzo"
-    comedor = clean_text(request.form.get("comedor")) or "Comedor 01"
-    fundo = clean_text(request.form.get("fundo")) or "Vivadis"
+    tipo = normalizar_tipo_alimentacion(request.form.get("tipo") or "ALMUERZO")
+    proveedor = clean_text(request.form.get("proveedor")).upper()
+    fundo = clean_text(request.form.get("fundo")).upper()  # CULTIVO
+    obs = clean_text(request.form.get("observacion")).upper()  # LOTE
+    if not proveedor:
+        return jsonify({"ok": False, "msg": "Selecciona PROVEEDOR / CONCESIONARIO."}), 400
+    if not fundo:
+        return jsonify({"ok": False, "msg": "Ingresa CULTIVO."}), 400
+    if not obs:
+        return jsonify({"ok": False, "msg": "Ingresa LOTE."}), 400
+    precio = precio_por_proveedor_tipo(proveedor, tipo)
+    if precio is None:
+        return jsonify({"ok": False, "msg": f"Proveedor no configurado: {proveedor}."}), 400
     cantidad = int(float(request.form.get("cantidad") or 1))
-    precio = float(request.form.get("precio_unitario") or 6.5)
     total = cantidad * precio
-    obs = clean_text(request.form.get("observacion")).upper() or "REGISTRO AUTOMATICO"
+    comedor = ""
     es_adicional = 1 if request.form.get("adicional") == "1" and session.get("role") == "admin" else 0
     modo_prueba = 1 if cfg_get("modo_prueba", "0") == "1" else 0
     if modo_prueba and "[MODO PRUEBA]" not in obs:
@@ -5759,9 +5895,9 @@ def api_consumo_scan():
     hora = hora_now()
     try:
         new_id = q_exec("""
-            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba))
+            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
     except Exception:
         return jsonify({"ok": False, "msg": f"No se pudo guardar. El DNI {dni} puede estar duplicado para esta fecha."}), 409
 
@@ -5769,7 +5905,7 @@ def api_consumo_scan():
     row_html = f"""
     <tr class="fila-db-consumo consumo-recien-guardado" data-codigo="{trabajador['codigo'] or ''}">
       <td>✅</td><td>{row['fecha']}</td><td>{row['hora']}</td><td>{row['dni']}</td><td>{row['trabajador']}</td><td>{row['area']}</td>
-      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['comedor']}</td><td>{row['fundo']}</td><td>{row['responsable'] or '-'}</td>
+      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['proveedor'] or '-'}</td><td>{row['fundo'] or '-'}</td><td>{row['observacion'] or '-'}</td><td>{row['responsable'] or '-'}</td>
       <td>{row['cantidad']}</td><td>{money(row['precio_unitario'])}</td><td>{money(row['total'])}</td><td><span class="badge warn">{row['estado']}</span></td>
       <td><form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center"><input type="hidden" name="id" value="{row['id']}"><input name="clave" placeholder="Clave" style="width:85px;padding:8px"><button class="btn-red" style="padding:8px 10px">Quitar</button></form></td>
     </tr>
@@ -5785,6 +5921,11 @@ def api_consumo_scan():
         "nombre": trabajador["nombre"],
         "area": trabajador["area"],
         "tipo_identificador": tipo_id,
+        "proveedor": proveedor,
+        "tipo": tipo,
+        "precio_unitario": precio,
+        "cultivo": fundo,
+        "lote": obs,
         "id": row["id"],
         "total_fecha": total_fecha,
     })
@@ -6617,8 +6758,24 @@ def configuracion():
         f"<tr><td>{u['username']}</td><td>{u['role']}</td><td><span class='badge {'ok' if u['active'] else 'off'}'>{'Activo' if u['active'] else 'Bloqueado'}</span></td></tr>"
         for u in usuarios
     ])
+    proveedores_cfg = q_all("SELECT * FROM proveedores_comedor ORDER BY nombre")
+    proveedores_html = "".join([
+        f"""
+        <tr>
+          <td><input form="prov_form_{p['id']}" name="nombre" value="{escape(p['nombre'])}" required style="min-width:210px;text-transform:uppercase"></td>
+          <td><input form="prov_form_{p['id']}" type="number" step="0.0001" min="0" name="precio_desayuno" value="{float(p['precio_desayuno'] or 0):.4f}" required></td>
+          <td><input form="prov_form_{p['id']}" type="number" step="0.0001" min="0" name="precio_almuerzo" value="{float(p['precio_almuerzo'] or 0):.4f}" required></td>
+          <td><input form="prov_form_{p['id']}" type="number" step="0.0001" min="0" name="precio_dieta" value="{float(p['precio_dieta'] or 0):.4f}" required></td>
+          <td><input form="prov_form_{p['id']}" type="number" step="0.0001" min="0" name="precio_cena" value="{float(p['precio_cena'] or 0):.4f}" required></td>
+          <td style="white-space:nowrap">
+            <form id="prov_form_{p['id']}" method="post" action="{url_for('guardar_proveedor_comedor', proveedor_id=p['id'])}" style="display:inline"><button class="btn-blue" style="min-height:34px;padding:7px 10px">Guardar</button></form>
+            <form method="post" action="{url_for('eliminar_proveedor_comedor', proveedor_id=p['id'])}" style="display:inline" onsubmit="return confirm('¿Eliminar este proveedor del catálogo? Los consumos históricos no se borrarán.')"><button class="btn-red" style="min-height:34px;padding:7px 10px">Eliminar</button></form>
+          </td>
+        </tr>
+        """ for p in proveedores_cfg
+    ]) or "<tr><td colspan='6'>No hay proveedores configurados.</td></tr>"
 
-    html = topbar("Configuración", "Bloqueo por horario, clave para quitar y usuarios") + f"""
+    html = topbar("Configuración", "Horarios, usuarios y catálogo de proveedores/precios") + f"""
     <div class="card">
       <h3 style="margin-top:0">Bloqueo de registro por horario</h3>
       <form method="post" class="form-grid" id="form_configuracion">
@@ -6643,12 +6800,86 @@ def configuracion():
 
     <br>
     <div class="card">
+      <h3 style="margin-top:0">🍽️ Proveedores / concesionarios y precios</h3>
+      <p class="muted small">Se cargaron los 3 proveedores del Excel de setiembre 2026. El registro toma el precio directamente de este catálogo. Para ALMUERZO se inicializó con el valor de ALMUERZO EN CAMPO; puedes modificarlo aquí.</p>
+      <form method="post" action="{url_for('agregar_proveedor_comedor')}" class="form-grid" style="margin-bottom:14px">
+        <input name="nombre" placeholder="NUEVO PROVEEDOR" required style="text-transform:uppercase">
+        <input type="number" step="0.0001" min="0" name="precio_desayuno" placeholder="DESAYUNO" required>
+        <input type="number" step="0.0001" min="0" name="precio_almuerzo" placeholder="ALMUERZO" required>
+        <input type="number" step="0.0001" min="0" name="precio_dieta" placeholder="DIETA" required>
+        <input type="number" step="0.0001" min="0" name="precio_cena" placeholder="CENA" required>
+        <button class="btn-green">Agregar proveedor</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Proveedor</th><th>Desayuno</th><th>Almuerzo</th><th>Dieta</th><th>Cena</th><th>Acciones</th></tr></thead>
+          <tbody>{proveedores_html}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <br>
+    <div class="card">
       <div class="table-head"><h3>Usuarios y claves</h3><a class="btn btn-blue" href="{url_for('usuarios_admin')}">Crear usuarios</a></div>
       <div class="table-wrap"><table><tr><th>Usuario</th><th>Rol</th><th>Estado</th></tr>{usuarios_html}</table></div>
     </div>
     """
     return render_page(html, "config")
 
+
+def _precio_form(name):
+    try:
+        return max(0.0, float(request.form.get(name) or 0))
+    except Exception:
+        return 0.0
+
+@app.route("/configuracion/proveedores/agregar", methods=["POST"])
+@login_required
+@roles_required("admin")
+def agregar_proveedor_comedor():
+    nombre = clean_text(request.form.get("nombre")).upper()
+    if not nombre:
+        flash("Ingresa el nombre del proveedor.", "error")
+        return redirect(url_for("configuracion"))
+    if q_one("SELECT id FROM proveedores_comedor WHERE UPPER(TRIM(nombre))=UPPER(TRIM(?))", (nombre,)):
+        flash("Ese proveedor ya existe.", "error")
+        return redirect(url_for("configuracion"))
+    q_exec("INSERT INTO proveedores_comedor(nombre,precio_desayuno,precio_almuerzo,precio_dieta,precio_cena,activo) VALUES(?,?,?,?,?,1)",
+           (nombre, _precio_form("precio_desayuno"), _precio_form("precio_almuerzo"), _precio_form("precio_dieta"), _precio_form("precio_cena")))
+    audit_event("PROVEEDOR_COMEDOR_CREADO", "proveedores_comedor", nombre, "Catálogo de precios")
+    flash(f"Proveedor agregado: {nombre}.", "ok")
+    return redirect(url_for("configuracion"))
+
+@app.route("/configuracion/proveedores/<int:proveedor_id>/guardar", methods=["POST"])
+@login_required
+@roles_required("admin")
+def guardar_proveedor_comedor(proveedor_id):
+    nombre = clean_text(request.form.get("nombre")).upper()
+    if not nombre:
+        flash("El nombre del proveedor es obligatorio.", "error")
+        return redirect(url_for("configuracion"))
+    otro = q_one("SELECT id FROM proveedores_comedor WHERE UPPER(TRIM(nombre))=UPPER(TRIM(?)) AND id<>?", (nombre, proveedor_id))
+    if otro:
+        flash("Ya existe otro proveedor con ese nombre.", "error")
+        return redirect(url_for("configuracion"))
+    q_exec("UPDATE proveedores_comedor SET nombre=?,precio_desayuno=?,precio_almuerzo=?,precio_dieta=?,precio_cena=?,actualizado=CURRENT_TIMESTAMP WHERE id=?",
+           (nombre, _precio_form("precio_desayuno"), _precio_form("precio_almuerzo"), _precio_form("precio_dieta"), _precio_form("precio_cena"), proveedor_id))
+    audit_event("PROVEEDOR_COMEDOR_ACTUALIZADO", "proveedores_comedor", proveedor_id, nombre)
+    flash(f"Proveedor/precios actualizados: {nombre}.", "ok")
+    return redirect(url_for("configuracion"))
+
+@app.route("/configuracion/proveedores/<int:proveedor_id>/eliminar", methods=["POST"])
+@login_required
+@roles_required("admin")
+def eliminar_proveedor_comedor(proveedor_id):
+    p = q_one("SELECT * FROM proveedores_comedor WHERE id=?", (proveedor_id,))
+    if not p:
+        flash("Proveedor no encontrado.", "error")
+        return redirect(url_for("configuracion"))
+    q_exec("DELETE FROM proveedores_comedor WHERE id=?", (proveedor_id,))
+    audit_event("PROVEEDOR_COMEDOR_ELIMINADO", "proveedores_comedor", proveedor_id, p["nombre"])
+    flash(f"Proveedor eliminado del catálogo: {p['nombre']}.", "ok")
+    return redirect(url_for("configuracion"))
 
 @app.route("/usuarios", methods=["GET", "POST"])
 @login_required
@@ -6833,7 +7064,17 @@ def exportar_consumos():
     fecha = request.args.get("fecha") or request.args.get("fecha_inicio") or hoy_iso()
     fecha = clean_text(fecha) or hoy_iso()
     rows = q_all("SELECT * FROM consumos WHERE fecha=? ORDER BY hora DESC,id DESC", (fecha,))
-    df = pd.DataFrame([dict(r) for r in rows])
+    datos = []
+    for r in rows:
+        d = dict(r)
+        datos.append({
+            "FECHA": d.get("fecha"), "HORA": d.get("hora"), "DNI": d.get("dni"),
+            "TRABAJADOR": d.get("trabajador"), "AREA": d.get("area"), "TIPO_ALIMENTACION": d.get("tipo"),
+            "PROVEEDOR": d.get("proveedor") or "", "CULTIVO": d.get("fundo") or "", "LOTE": d.get("observacion") or "",
+            "RESPONSABLE": d.get("responsable") or "", "CANTIDAD": d.get("cantidad"),
+            "PRECIO_UNITARIO": d.get("precio_unitario"), "TOTAL": d.get("total"), "ESTADO": d.get("estado")
+        })
+    df = pd.DataFrame(datos)
     output = BytesIO()
     df.to_excel(output, index=False)
     output.seek(0)
