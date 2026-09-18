@@ -247,7 +247,7 @@ def init_db():
         # Índice de búsqueda: el código puede venir del ERP/Excel y se usa como identificador alternativo al DNI.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_trabajadores_codigo ON trabajadores(codigo)")
         cols = [x["name"] for x in conn.execute("PRAGMA table_info(consumos)").fetchall()]
-        for col, sqltype, default in [("comedor", "TEXT", "''"), ("fundo", "TEXT", "''"), ("responsable", "TEXT", "''"), ("adicional", "INTEGER", "0"), ("modo_prueba", "INTEGER", "0"), ("proveedor", "TEXT", "''")]:
+        for col, sqltype, default in [("comedor", "TEXT", "''"), ("fundo", "TEXT", "''"), ("responsable", "TEXT", "''"), ("supervisor", "TEXT", "''"), ("adicional", "INTEGER", "0"), ("modo_prueba", "INTEGER", "0"), ("proveedor", "TEXT", "''")]: 
             if col not in cols:
                 conn.execute(f"ALTER TABLE consumos ADD COLUMN {col} {sqltype} DEFAULT {default}")
         try:
@@ -377,7 +377,7 @@ def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=
         </div>
         <div>
           <label>Buscar</label>
-          <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, cultivo, lote, proveedor...">
+          <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, responsable, supervisor, cultivo, lote, proveedor...">
         </div>
         <button class="btn-blue">🔍 Filtrar</button>
         <a class="btn" href="{action}">Actualizar</a>
@@ -3862,7 +3862,7 @@ def generar_excel_cierre(fecha=None):
     pedidos = q_all("SELECT * FROM consumos WHERE fecha=? ORDER BY area,trabajador,hora,id", (fecha,))
     df = pd.DataFrame([dict(p) for p in pedidos])
     if df.empty:
-        df = pd.DataFrame(columns=["fecha","hora","dni","trabajador","empresa","area","tipo","cantidad","precio_unitario","total","estado","creado_por","entregado_por","entregado_en"])
+        df = pd.DataFrame(columns=["fecha","hora","dni","trabajador","empresa","area","tipo","proveedor","fundo","observacion","responsable","supervisor","cantidad","precio_unitario","total","estado","creado_por","entregado_por","entregado_en"])
     resumen_area = df.groupby(["area","estado"], as_index=False).agg(cantidad=("cantidad","sum"), total=("total","sum")) if not df.empty and "area" in df.columns else pd.DataFrame()
     resumen_usuario = df.groupby(["creado_por"], as_index=False).agg(consumos=("dni","count"), total=("total","sum")) if not df.empty and "creado_por" in df.columns else pd.DataFrame()
     filename = f"cierre_comedor_{fecha.replace('-','_')}.xlsx"
@@ -4142,9 +4142,13 @@ def consumos():
         proveedor = clean_text(request.form.get("proveedor")).upper()
         fundo = clean_text(request.form.get("fundo")).upper()  # CULTIVO
         responsable = clean_text(request.form.get("responsable")).upper()
+        supervisor = clean_text(request.form.get("supervisor")).upper()
         obs = clean_text(request.form.get("observacion")).upper()  # LOTE
         if not responsable:
             flash("El campo RESPONSABLE es obligatorio.", "error")
+            return redirect(url_for("consumos", fecha=fecha))
+        if not supervisor:
+            flash("El campo SUPERVISOR es obligatorio.", "error")
             return redirect(url_for("consumos", fecha=fecha))
         if not fundo:
             flash("El campo CULTIVO es obligatorio.", "error")
@@ -4191,9 +4195,9 @@ def consumos():
                     continue
                 try:
                     q_exec("""
-                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
+                        INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,supervisor,adicional,estado,creado_por,modo_prueba,proveedor)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, supervisor, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
                     creados += 1
                 except Exception as e:
                     errores.append(f"{dni}: no se pudo registrar")
@@ -4221,9 +4225,9 @@ def consumos():
 
         try:
             q_exec("""
-                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
+                INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,supervisor,adicional,estado,creado_por,modo_prueba,proveedor)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (fecha, hora_now(), dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, supervisor, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
         except Exception:
             flash(f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}.", "error")
             return redirect(url_for("consumos", fecha=fecha))
@@ -4239,9 +4243,9 @@ def consumos():
     where = cond
     final_params = list(params)
     if buscar:
-        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR observacion LIKE ? OR proveedor LIKE ? OR responsable LIKE ? OR tipo LIKE ? OR dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?))"
+        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR observacion LIKE ? OR proveedor LIKE ? OR responsable LIKE ? OR supervisor LIKE ? OR tipo LIKE ? OR dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?))"
         b = f"%{buscar}%"
-        final_params += [b, b, b, b, b, b, b, b, b]
+        final_params += [b, b, b, b, b, b, b, b, b, b]
 
     rows = q_all(f"SELECT consumos.*, COALESCE((SELECT codigo FROM trabajadores WHERE trabajadores.dni=consumos.dni LIMIT 1),'') AS codigo FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
     tabla = "".join([
@@ -4258,6 +4262,7 @@ def consumos():
           <td>{r['fundo'] or '-'}</td>
           <td>{r['observacion'] or '-'}</td>
           <td>{r['responsable'] or '-'}</td>
+          <td>{r['supervisor'] or '-'}</td>
           <td>{r['cantidad']}</td>
           <td>{money(r['precio_unitario'])}</td>
           <td>{money(r['total'])}</td>
@@ -4271,7 +4276,7 @@ def consumos():
           </td>
         </tr>
         """ for r in rows
-    ]) or "<tr id='fila_sin_registros'><td colspan='16'>Sin registros para este filtro.</td></tr>"
+    ]) or "<tr id='fila_sin_registros'><td colspan='17'>Sin registros para este filtro.</td></tr>"
 
     estado_fecha = estado_dia(fecha)
     fecha_abierta = (estado_fecha == "ABIERTO")
@@ -4312,7 +4317,7 @@ def consumos():
     <div class="card">
       <h3 style="margin-top:0">Registrar consumo</h3>
       <div id="indicador_masivo_principal" style="margin:8px 0 12px;padding:14px 16px;border-radius:14px;border:2px solid #38bdf8;background:#e0f2fe;color:#075985;font-weight:950;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <span>📦 Registro masivo automático activo: primero coloca RESPONSABLE; cada DNI o CÓDIGO válido se guardará al instante y aparecerá en CONSUMOS DE LA FECHA.</span>
+        <span>📦 Registro continuo activo: completa RESPONSABLE, SUPERVISOR, CULTIVO, LOTE, PROVEEDOR y TIPO; luego cada DNI o CÓDIGO válido se guardará al instante.</span>
         <span id="indicador_masivo_contador" style="background:#0d73b8;color:white;border-radius:999px;padding:7px 12px">0 en lote</span>
       </div>
       <div id="contador_lecturas_box" style="margin:8px 0 14px;padding:13px 14px;border-radius:16px;border:2px solid #16a34a;background:linear-gradient(135deg,#052e16,#064e3b);color:white;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;box-shadow:0 10px 24px rgba(22,163,74,.22)">
@@ -4328,27 +4333,19 @@ def consumos():
         </div>
       </div>
       <form method="post" class="form-grid" id="form_consumo" onsubmit="return validarAntesEnviar(event)">
-        <input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Elige la fecha operativa. Puedes registrar si el día está ABIERTO.">
-        <input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE" required style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}>
-        <input id="cultivo_consumo" name="fundo" placeholder="CULTIVO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
-        <input id="lote_consumo" name="observacion" placeholder="LOTE OBLIGATORIO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}>
-        <select id="proveedor_select" name="proveedor" required {disabled}>
-          <option value="">PROVEEDOR / CONCESIONARIO</option>
-          {proveedor_options}
-        </select>
-        <select id="tipo_alimentacion_select" name="tipo" required {disabled}>
-          <option value="DESAYUNO">DESAYUNO</option>
-          <option value="ALMUERZO" selected>ALMUERZO</option>
-          <option value="DIETA">DIETA</option>
-          <option value="CENA">CENA</option>
-        </select>
-        <input id="precio_unitario_visible" name="precio_unitario" value="0.0000" placeholder="PRECIO" readonly title="Precio según proveedor y tipo de alimentación">
-        <input id="dni_consumo" name="dni" placeholder="DNI / CÓDIGO / QR" required autofocus inputmode="text" autocapitalize="characters" maxlength="80" autocomplete="off" enterkeyhint="next" oninput="dniInputHandler()" onkeyup="dniInputHandler()" onchange="dniInputHandler()" {disabled}>
-        <input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}>
-        <button type="button" class="btn-blue" onclick="buscarTrabajadorConsumo(true)" {disabled}>🔎 Buscar trabajador</button>
-        <button type="button" id="btn_qr" class="btn-blue" onclick="abrirScannerQR()" {disabled}>📷 Cámara QR / Barras</button>
+        <div class="consumo-field"><label>FECHA</label><input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Fecha operativa"></div>
+        <div class="consumo-field"><label>RESPONSABLE</label><input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE" required autocomplete="off" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}></div>
+        <div class="consumo-field"><label>SUPERVISOR</label><input id="supervisor_consumo" name="supervisor" placeholder="SUPERVISOR" required autocomplete="off" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" {disabled}></div>
+        <div class="consumo-field"><label>CULTIVO</label><input id="cultivo_consumo" name="fundo" placeholder="CULTIVO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}></div>
+        <div class="consumo-field"><label>LOTE</label><input id="lote_consumo" name="observacion" placeholder="LOTE OBLIGATORIO" required autocomplete="off" oninput="this.value=this.value.toUpperCase()" {disabled}></div>
+        <div class="consumo-field"><label>PROVEEDOR</label><select id="proveedor_select" name="proveedor" required {disabled}><option value="">PROVEEDOR / CONCESIONARIO</option>{proveedor_options}</select></div>
+        <div class="consumo-field"><label>TIPO CONSUMO</label><select id="tipo_alimentacion_select" name="tipo" required {disabled}><option value="DESAYUNO">DESAYUNO</option><option value="ALMUERZO" selected>ALMUERZO</option><option value="DIETA">DIETA</option><option value="CENA">CENA</option></select></div>
+        <div class="consumo-field consumo-dni"><label>DNI / CÓDIGO</label><input type="tel" id="dni_consumo" name="dni" placeholder="DNI / CÓDIGO / QR" required autofocus inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" enterkeyhint="done" {disabled}></div>
+        <input type="hidden" id="precio_unitario_visible" name="precio_unitario" value="0.0000">
+        <button type="button" id="btn_qr" class="btn-blue consumo-camera-btn" {disabled}>📷 Cámara QR / Barras</button>
+        <div class="consumo-field consumo-name"><label>TRABAJADOR IDENTIFICADO</label><input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}></div>
         <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
-        <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px 0;grid-column:1/-1"></div>
+        <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px auto;grid-column:1/-1"></div>
         <input type="hidden" name="cantidad" value="1">
         <label class="label-lote-final"><input type="checkbox" id="modo_lote" name="modo_lote" value="1" checked onchange="toggleLote()"> Registro continuo / masivo</label>
         {('<label style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
@@ -5223,7 +5220,7 @@ def consumos():
       </div>
       <div class="table-wrap">
         <table id="tabla_consumos_principal">
-          <thead><tr><th>Sel.</th><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Proveedor</th><th>Cultivo</th><th>Lote</th><th>Responsable</th><th>Cant.</th><th>P. Unit.</th><th>Total</th><th>Estado</th><th>Quitar</th></tr></thead>
+          <thead><tr><th>Sel.</th><th>Fecha</th><th>Hora</th><th>DNI</th><th>Trabajador</th><th>Área</th><th>Tipo</th><th>Proveedor</th><th>Cultivo</th><th>Lote</th><th>Responsable</th><th>Supervisor</th><th>Cant.</th><th>P. Unit.</th><th>Total</th><th>Estado</th><th>Quitar</th></tr></thead>
           <tbody id="tbody_consumos_principal">
           {tabla}
           </tbody>
@@ -5538,9 +5535,27 @@ def consumos():
   #tabla_consumos_principal tbody tr.fila-db-consumo td{display:grid!important;grid-template-columns:96px minmax(0,1fr)!important;gap:8px!important;align-items:center!important;width:100%!important;box-sizing:border-box!important;padding:5px 7px!important;border:0!important;border-bottom:1px solid #eef2f7!important;white-space:normal!important;overflow-wrap:anywhere!important;font-size:12px!important;}
   #tabla_consumos_principal tbody tr.fila-db-consumo td:last-child{border-bottom:0!important;}
   #tabla_consumos_principal tbody tr.fila-db-consumo td::before{content:attr(data-label);font-weight:900;color:#075985!important;font-size:11px!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td:nth-child(16) .badge{display:inline-flex!important;justify-content:center!important;min-width:100px!important;width:auto!important;border-radius:999px!important;padding:5px 9px!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td:nth-child(17) form{display:grid!important;grid-template-columns:minmax(0,1fr) 88px!important;gap:6px!important;width:100%!important;}
+  #tabla_consumos_principal tbody tr.fila-db-consumo td:nth-child(17) input{width:100%!important;min-width:0!important;}
   #tabla_consumos_principal tbody tr#fila_sin_registros{display:block!important;padding:14px!important;}
   #tabla_consumos_principal tbody tr#fila_sin_registros td{display:block!important;}
   .table-wrap{overflow:visible!important;max-height:none!important;}
+}
+/* Orden operativo: Fecha / Responsable / Supervisor / Cultivo / Lote / Proveedor / Tipo / DNI / Cámara */
+#form_consumo{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:10px!important;align-items:end!important;}
+#form_consumo .consumo-field{min-width:0!important;display:flex!important;flex-direction:column!important;gap:5px!important;}
+#form_consumo .consumo-field label{font-size:11px!important;font-weight:950!important;color:#475569!important;letter-spacing:.25px!important;padding-left:2px!important;}
+#form_consumo .consumo-field input,#form_consumo .consumo-field select{width:100%!important;box-sizing:border-box!important;min-height:45px!important;}
+#form_consumo .consumo-camera-btn{grid-column:1/-1!important;min-height:47px!important;font-size:14px!important;}
+#form_consumo .consumo-name{grid-column:1/-1!important;}
+#form_consumo #info_trabajador_consumo,#form_consumo #qr-reader,#form_consumo .label-lote-final,#form_consumo #lote_panel,#form_consumo #btn_submit_consumo,#form_consumo>a.btn{grid-column:1/-1!important;}
+@media (max-width: 760px){
+  #form_consumo{grid-template-columns:1fr 1fr!important;gap:8px!important;}
+  #form_consumo .consumo-field label{font-size:9.5px!important;color:#cbd5e1!important;}
+  #form_consumo .consumo-field input,#form_consumo .consumo-field select{min-height:39px!important;height:39px!important;font-size:12px!important;padding:7px 9px!important;}
+  #form_consumo .consumo-camera-btn{min-height:43px!important;height:43px!important;font-size:12.5px!important;}
+  #form_consumo .consumo-name input{font-weight:900!important;}
 }
 @media (max-width: 420px){
   .apb-scan-video{height:205px!important;}
@@ -5552,7 +5567,7 @@ def consumos():
 (function(){
   const $ = (s,r=document)=>r.querySelector(s);
   const clean = v=>String(v ?? '').trim().toUpperCase();
-  let busy=false, timer=null, aborter=null, camStream=null, camRaf=0, camBusy=false;
+  let busy=false, timer=null, aborter=null, camStream=null, camRaf=0, camBusy=false, lastCamCode="", lastCamAt=0; const CAM_REPEAT_MS=4000;
 
   function shortToast(msg, ok=true){
     let t=document.getElementById('apb_scan_toast');
@@ -5589,7 +5604,7 @@ def consumos():
   }
   function setCount(n){ const c=document.getElementById('contador_lecturas_hoy'); if(c && n!==undefined && n!==null) c.textContent=String(n); }
   function decorateRows(root=document){
-    const labels=['Sel.','Fecha','Hora','DNI','Trabajador','Área','Tipo','Proveedor','Cultivo','Lote','Responsable','Cant.','P. Unit.','Total','Estado','Quitar'];
+    const labels=['Sel.','Fecha','Hora','DNI','Trabajador','Área','Tipo','Proveedor','Cultivo','Lote','Responsable','Supervisor','Cant.','P. Unit.','Total','Estado','Quitar'];
     root.querySelectorAll('#tbody_consumos_principal tr.fila-db-consumo').forEach(tr=>{
       Array.from(tr.children).forEach((td,i)=>td.setAttribute('data-label',labels[i]||''));
     });
@@ -5618,7 +5633,9 @@ def consumos():
   async function scan(identifier, force=false){
     identifier=clean(identifier); if(!identifier||busy) return;
     const resp=clean($('#form_consumo [name="responsable"]')?.value);
+    const sup=clean($('#form_consumo [name="supervisor"]')?.value);
     if(!resp){ shortToast('Primero coloca RESPONSABLE.',false); return; }
+    if(!sup){ shortToast('Primero coloca SUPERVISOR.',false); return; }
     busy=true;
     if(aborter) try{aborter.abort();}catch(e){}
     aborter=new AbortController();
@@ -5652,6 +5669,7 @@ def consumos():
   function replaceInput(){
     const old=document.getElementById('dni_consumo'); if(!old) return null;
     const n=old.cloneNode(true); ['oninput','onkeyup','onchange','onkeydown'].forEach(a=>n.removeAttribute(a)); old.replaceWith(n);
+    n.type='tel'; n.setAttribute('inputmode','numeric'); n.setAttribute('pattern','[0-9]*'); n.setAttribute('enterkeyhint','done');
     n.addEventListener('input',inputHandler);
     n.addEventListener('paste',()=>setTimeout(()=>{n.value=clean(n.value);scan(n.value,true);},20));
     n.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();clearTimeout(timer);scan(n.value,true);} });
@@ -5678,7 +5696,7 @@ def consumos():
     const c=document.getElementById('qr-reader'); if(c){c.style.display='none';c.innerHTML='';}
   }
   async function openCamera(){
-    const responsible=clean($('#form_consumo [name="responsable"]')?.value); if(!responsible){shortToast('Primero coloca RESPONSABLE.',false);return;}
+    const responsible=clean($('#form_consumo [name="responsable"]')?.value); const supervisor=clean($('#form_consumo [name="supervisor"]')?.value); if(!responsible){shortToast('Primero coloca RESPONSABLE.',false);return;} if(!supervisor){shortToast('Primero coloca SUPERVISOR.',false);return;}
     let c=document.getElementById('qr-reader');
     if(!c){c=document.createElement('div');c.id='qr-reader';document.getElementById('form_consumo')?.appendChild(c);}
     c.style.display='block';
@@ -5702,7 +5720,16 @@ def consumos():
             canvas.width=video.videoWidth;canvas.height=video.videoHeight;ctx.drawImage(video,0,0,canvas.width,canvas.height);
             const img=ctx.getImageData(0,0,canvas.width,canvas.height), qr=jsQR(img.data,img.width,img.height); if(qr?.data) code=qr.data;
           }
-          if(code){ camBusy=true; await scan(code,true); setTimeout(()=>{camBusy=false;},850); }
+          if(code){
+            const norm=clean(code), now=Date.now();
+            if(norm===lastCamCode && (now-lastCamAt)<CAM_REPEAT_MS){
+              /* mismo código aún frente a la cámara: no repetir aviso/registro */
+            }else{
+              lastCamCode=norm; lastCamAt=now; camBusy=true;
+              await scan(norm,true);
+              setTimeout(()=>{camBusy=false;},CAM_REPEAT_MS);
+            }
+          }
         }catch(e){}
       }
       camRaf=requestAnimationFrame(loop);
@@ -5724,6 +5751,7 @@ def consumos():
   function faltantesRegistro(){
     const faltan=[];
     if(!clean($('#form_consumo [name="responsable"]')?.value)) faltan.push('RESPONSABLE');
+    if(!clean($('#form_consumo [name="supervisor"]')?.value)) faltan.push('SUPERVISOR');
     if(!clean($('#form_consumo [name="fundo"]')?.value)) faltan.push('CULTIVO');
     if(!clean($('#form_consumo [name="observacion"]')?.value)) faltan.push('LOTE');
     if(!clean($('#form_consumo [name="proveedor"]')?.value)) faltan.push('PROVEEDOR');
@@ -5747,14 +5775,56 @@ def consumos():
     }
     return await scanBase(identifier,force);
   };
+  function ctxKey(){
+    const fecha=$('#form_consumo [name="fecha"]')?.value||'actual';
+    return 'apb_consumo_contexto_'+fecha;
+  }
+  function saveContext(){
+    try{
+      const f=document.getElementById('form_consumo'); if(!f) return;
+      const data={
+        responsable:clean($('[name="responsable"]',f)?.value),
+        supervisor:clean($('[name="supervisor"]',f)?.value),
+        fundo:clean($('[name="fundo"]',f)?.value),
+        observacion:clean($('[name="observacion"]',f)?.value),
+        proveedor:$('[name="proveedor"]',f)?.value||'',
+        tipo:$('[name="tipo"]',f)?.value||'ALMUERZO'
+      };
+      localStorage.setItem(ctxKey(),JSON.stringify(data));
+    }catch(e){}
+  }
+  function restoreContext(){
+    try{
+      const f=document.getElementById('form_consumo'); if(!f) return;
+      const raw=localStorage.getItem(ctxKey()); if(!raw) return; const d=JSON.parse(raw)||{};
+      const map={responsable:d.responsable,supervisor:d.supervisor,fundo:d.fundo,observacion:d.observacion,proveedor:d.proveedor,tipo:d.tipo};
+      Object.entries(map).forEach(([k,v])=>{ const el=$(`[name="${k}"]`,f); if(el && v!==undefined && v!==null && String(v)!=='') el.value=v; });
+      const dni=document.getElementById('dni_consumo'); if(dni) dni.value='';
+      const name=document.getElementById('nombre_trabajador'); if(name) name.value='';
+    }catch(e){}
+  }
+  function bindContext(){
+    const f=document.getElementById('form_consumo'); if(!f) return;
+    ['responsable','supervisor','fundo','observacion','proveedor','tipo'].forEach(k=>{
+      const el=$(`[name="${k}"]`,f); if(el){ el.addEventListener('input',saveContext); el.addEventListener('change',saveContext); }
+    });
+    document.addEventListener('submit',e=>{
+      const form=e.target;
+      if(form && String(form.action||'').includes('/quitar_consumo')){
+        saveContext();
+        const dni=document.getElementById('dni_consumo'); if(dni) dni.value='';
+      }
+    },true);
+  }
   document.addEventListener('DOMContentLoaded',()=>{
+    restoreContext();
     replaceInput(); replaceSearchButton(); replaceCameraButton(); setupFilter(); decorateRows(); filterRows();
     window.buscarTrabajadorConsumo=(force=false)=>scan(document.getElementById('dni_consumo')?.value,!!force);
     window.dniInputHandler=()=>{};
     window.abrirScannerQR=openCamera; window.cerrarScannerQR=stopCamera;
-    $('#proveedor_select')?.addEventListener('change',actualizarPrecio);
-    $('#tipo_alimentacion_select')?.addEventListener('change',actualizarPrecio);
-    actualizarPrecio();
+    $('#proveedor_select')?.addEventListener('change',()=>{actualizarPrecio();saveContext();});
+    $('#tipo_alimentacion_select')?.addEventListener('change',()=>{actualizarPrecio();saveContext();});
+    bindContext(); actualizarPrecio(); saveContext();
     setTimeout(()=>document.getElementById('dni_consumo')?.focus(),120);
   });
 })();
@@ -5778,8 +5848,11 @@ def api_registrar_consumo_auto():
     if bloqueado and session.get("role") != "admin":
         return jsonify({"ok": False, "msg": msg_bloq}), 400
     responsable = clean_text(request.form.get("responsable")).upper()
+    supervisor = clean_text(request.form.get("supervisor")).upper()
     if not responsable:
         return jsonify({"ok": False, "msg": "Primero registra el RESPONSABLE antes de detectar DNI/CÓDIGO."}), 400
+    if not supervisor:
+        return jsonify({"ok": False, "msg": "Primero registra el SUPERVISOR."}), 400
     identificador = request.form.get("dni")
     trabajador, tipo_id, valor_id, error_id = resolver_trabajador(identificador)
     if not trabajador:
@@ -5806,9 +5879,9 @@ def api_registrar_consumo_auto():
     hora = hora_now()
     try:
         new_id = q_exec("""
-            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
+            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,supervisor,adicional,estado,creado_por,modo_prueba,proveedor)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, supervisor, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
     except Exception:
         return jsonify({"ok": False, "msg": f"NO DUPLICADO: el DNI {dni} ya tiene consumo registrado para el día {fecha_peru_txt(fecha)}."}), 409
     if new_id:
@@ -5818,7 +5891,7 @@ def api_registrar_consumo_auto():
     html = f"""
     <tr class="fila-db-consumo consumo-recien-guardado">
       <td>✅</td><td>{row['fecha']}</td><td>{row['hora']}</td><td>{row['dni']}</td><td>{row['trabajador']}</td><td>{row['area']}</td>
-      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['proveedor'] or '-'}</td><td>{row['fundo'] or '-'}</td><td>{row['observacion'] or '-'}</td><td>{row['responsable'] or '-'}</td>
+      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['proveedor'] or '-'}</td><td>{row['fundo'] or '-'}</td><td>{row['observacion'] or '-'}</td><td>{row['responsable'] or '-'}</td><td>{row['supervisor'] or '-'}</td>
       <td>{row['cantidad']}</td><td>{money(row['precio_unitario'])}</td><td>{money(row['total'])}</td><td><span class="badge warn">{row['estado']}</span></td>
       <td><form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center"><input type="hidden" name="id" value="{row['id']}"><input name="clave" placeholder="Clave" style="width:85px;padding:8px"><button class="btn-red" style="padding:8px 10px">Quitar</button></form></td>
     </tr>
@@ -5845,8 +5918,11 @@ def api_consumo_scan():
         return jsonify({"ok": False, "msg": msg_bloq}), 400
 
     responsable = clean_text(request.form.get("responsable")).upper()
+    supervisor = clean_text(request.form.get("supervisor")).upper()
     if not responsable:
         return jsonify({"ok": False, "msg": "Primero coloca RESPONSABLE."}), 400
+    if not supervisor:
+        return jsonify({"ok": False, "msg": "Primero coloca SUPERVISOR."}), 400
 
     identificador = request.form.get("identificador") or request.form.get("dni") or ""
     trabajador, tipo_id, valor_id, error_id = resolver_trabajador(identificador)
@@ -5895,9 +5971,9 @@ def api_consumo_scan():
     hora = hora_now()
     try:
         new_id = q_exec("""
-            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,adicional,estado,creado_por,modo_prueba,proveedor)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
+            INSERT INTO consumos(fecha,hora,dni,trabajador,empresa,area,tipo,cantidad,precio_unitario,total,observacion,comedor,fundo,responsable,supervisor,adicional,estado,creado_por,modo_prueba,proveedor)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (fecha, hora, dni, trabajador["nombre"], trabajador["empresa"], trabajador["area"], tipo, cantidad, precio, total, obs, comedor, fundo, responsable, supervisor, es_adicional, "PENDIENTE", session["user"], modo_prueba, proveedor))
     except Exception:
         return jsonify({"ok": False, "msg": f"No se pudo guardar. El DNI {dni} puede estar duplicado para esta fecha."}), 409
 
@@ -5905,13 +5981,13 @@ def api_consumo_scan():
     row_html = f"""
     <tr class="fila-db-consumo consumo-recien-guardado" data-codigo="{trabajador['codigo'] or ''}">
       <td>✅</td><td>{row['fecha']}</td><td>{row['hora']}</td><td>{row['dni']}</td><td>{row['trabajador']}</td><td>{row['area']}</td>
-      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['proveedor'] or '-'}</td><td>{row['fundo'] or '-'}</td><td>{row['observacion'] or '-'}</td><td>{row['responsable'] or '-'}</td>
+      <td>{row['tipo']}{' + Adic.' if row['adicional'] else ''}</td><td>{row['proveedor'] or '-'}</td><td>{row['fundo'] or '-'}</td><td>{row['observacion'] or '-'}</td><td>{row['responsable'] or '-'}</td><td>{row['supervisor'] or '-'}</td>
       <td>{row['cantidad']}</td><td>{money(row['precio_unitario'])}</td><td>{money(row['total'])}</td><td><span class="badge warn">{row['estado']}</span></td>
       <td><form method="post" action="{url_for('quitar_consumo')}" style="display:flex;gap:6px;align-items:center"><input type="hidden" name="id" value="{row['id']}"><input name="clave" placeholder="Clave" style="width:85px;padding:8px"><button class="btn-red" style="padding:8px 10px">Quitar</button></form></td>
     </tr>
     """
     total_fecha = int((q_one("SELECT COUNT(*) AS c FROM consumos WHERE fecha=?", (fecha,)) or {"c": 0})["c"] or 0)
-    audit_event("REGISTRO_CONSUMO_SCAN", "consumos", row["id"], f"{tipo_id} {valor_id} -> DNI {dni} - responsable {responsable}")
+    audit_event("REGISTRO_CONSUMO_SCAN", "consumos", row["id"], f"{tipo_id} {valor_id} -> DNI {dni} - responsable {responsable} - supervisor {supervisor}")
     return jsonify({
         "ok": True,
         "msg": f"Guardado: {trabajador['nombre']}",
@@ -5922,6 +5998,7 @@ def api_consumo_scan():
         "area": trabajador["area"],
         "tipo_identificador": tipo_id,
         "proveedor": proveedor,
+        "supervisor": supervisor,
         "tipo": tipo,
         "precio_unitario": precio,
         "cultivo": fundo,
@@ -7027,6 +7104,7 @@ def plantilla_consumos():
         "TIPO": "Almuerzo",
         "FUNDO": "Kawsay Allpa",
         "RESPONSABLE": "Nombre responsable",
+        "SUPERVISOR": "Nombre supervisor",
         "CANTIDAD": 1,
         "PRECIO_UNITARIO": 6.5,
         "OBSERVACION": "REGISTRAR TU GRUPO"
@@ -7071,7 +7149,7 @@ def exportar_consumos():
             "FECHA": d.get("fecha"), "HORA": d.get("hora"), "DNI": d.get("dni"),
             "TRABAJADOR": d.get("trabajador"), "AREA": d.get("area"), "TIPO_ALIMENTACION": d.get("tipo"),
             "PROVEEDOR": d.get("proveedor") or "", "CULTIVO": d.get("fundo") or "", "LOTE": d.get("observacion") or "",
-            "RESPONSABLE": d.get("responsable") or "", "CANTIDAD": d.get("cantidad"),
+            "RESPONSABLE": d.get("responsable") or "", "SUPERVISOR": d.get("supervisor") or "", "CANTIDAD": d.get("cantidad"),
             "PRECIO_UNITARIO": d.get("precio_unitario"), "TOTAL": d.get("total"), "ESTADO": d.get("estado")
         })
     df = pd.DataFrame(datos)
