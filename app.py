@@ -4451,8 +4451,10 @@ def consumos():
           <small class="id-entry-help">CÓDIGO: se valida al dejar de escribir. DNI: espera los 8 dígitos completos.</small>
         </div>
         <input type="hidden" id="precio_unitario_visible" name="precio_unitario" value="0.0000">
-        <button type="button" id="btn_qr" class="btn-blue consumo-camera-btn" {disabled}>📷 Cámara QR / Barras</button>
-        {('<label class="consumo-adicional" style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '')}
+        <div class="consumo-actions-row">
+          <button type="button" id="btn_qr" class="btn-blue consumo-camera-btn" {disabled}>📷 Cámara QR / Barras</button>
+          {('<label class="consumo-adicional" style="font-weight:900"><input type="checkbox" name="adicional" value="1"> Consumo adicional</label>' if session.get('role')=='admin' else '<span></span>')}
+        </div>
         <div class="consumo-field consumo-name"><label>TRABAJADOR IDENTIFICADO</label><input id="nombre_trabajador" class="worker-name-field" placeholder="NOMBRE AUTOMÁTICO" readonly title="Nombre completo del trabajador" {disabled}></div>
         <div id="info_trabajador_consumo" style="display:none;grid-column:1/-1;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:14px;padding:12px;font-weight:900;color:#14532d"></div>
         <div id="qr-reader" style="display:none;width:420px;max-width:100%;margin:10px auto;grid-column:1/-1"></div>
@@ -5780,6 +5782,33 @@ def consumos():
   #form_consumo .consumo-adicional{font-size:10px!important;padding:6px 8px!important;gap:6px!important;}
 }
 
+/* ===== ORDEN MÓVIL DEFINITIVO: TIPO > DNI/CÓDIGO > CÁMARA + ADICIONAL ===== */
+#form_consumo .consumo-actions-row{grid-column:1/-1!important;order:9!important;display:grid!important;grid-template-columns:1fr 1fr!important;gap:7px!important;align-items:stretch!important;min-width:0!important;}
+#form_consumo .consumo-actions-row #btn_qr{grid-column:auto!important;grid-row:auto!important;order:initial!important;width:100%!important;margin:0!important;}
+#form_consumo .consumo-actions-row .consumo-adicional{grid-column:auto!important;grid-row:auto!important;order:initial!important;width:100%!important;margin:0!important;box-sizing:border-box!important;}
+@media (max-width:760px){
+  #form_consumo > .consumo-field:has(#tipo_alimentacion_select){order:7!important;grid-column:1/-1!important;}
+  #form_consumo .consumo-field.consumo-dni{order:8!important;grid-column:1/-1!important;margin:0!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{display:grid!important;grid-template-columns:82px minmax(0,1fr)!important;gap:6px!important;align-items:center!important;}
+  #form_consumo .consumo-field.consumo-dni #modo_id_consumo,
+  #form_consumo .consumo-field.consumo-dni #dni_consumo{grid-column:auto!important;grid-row:auto!important;min-height:38px!important;height:38px!important;margin:0!important;}
+  #form_consumo .consumo-actions-row{order:9!important;grid-column:1/-1!important;display:grid!important;grid-template-columns:1fr 1fr!important;gap:7px!important;margin:0!important;}
+  #form_consumo .consumo-actions-row #btn_qr,
+  #form_consumo button#btn_qr,
+  #form_consumo button.btn-blue:first-of-type{grid-row:auto!important;grid-column:auto!important;order:initial!important;min-height:38px!important;height:38px!important;margin:0!important;padding:6px 8px!important;}
+  #form_consumo .consumo-actions-row .consumo-adicional{display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:7px!important;min-height:38px!important;height:38px!important;margin:0!important;padding:6px 9px!important;border-radius:11px!important;border:1px solid rgba(148,163,184,.35)!important;white-space:nowrap!important;}
+  #form_consumo .consumo-name{order:10!important;grid-column:1/-1!important;}
+  #form_consumo .label-lote-final{order:11!important;grid-column:1/-1!important;}
+  #btn_submit_consumo{order:12!important;grid-column:1/-1!important;}
+  #form_consumo>a.btn{order:13!important;grid-column:1/-1!important;}
+}
+@media (max-width:420px){
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:74px minmax(0,1fr)!important;}
+  #form_consumo .consumo-actions-row{gap:6px!important;}
+  #form_consumo .consumo-actions-row #btn_qr{font-size:11px!important;}
+  #form_consumo .consumo-actions-row .consumo-adicional{font-size:10px!important;padding:6px 7px!important;gap:5px!important;}
+}
+
 </style>
 <script>
 (function(){
@@ -6067,25 +6096,8 @@ def consumos():
     },true);
   }
   function reordenarConsumosMobile(){
-    const form=document.getElementById('form_consumo');
-    if(!form || window.innerWidth>760) return;
-    const tipoField=document.getElementById('tipo_alimentacion_select')?.closest('.consumo-field');
-    const dniField=form.querySelector('.consumo-field.consumo-dni');
-    const camBtn=document.getElementById('btn_qr');
-    const adicionalLabel=form.querySelector('.consumo-adicional');
-    const nameField=form.querySelector('.consumo-field.consumo-name');
-    const loteLabel=form.querySelector('.label-lote-final');
-    const submitBtn=document.getElementById('btn_submit_consumo');
-    const refreshBtn=form.querySelector('a.btn');
-    const muted=form.querySelector('.muted.small');
-    if(tipoField && dniField) tipoField.after(dniField);
-    if(dniField && camBtn) dniField.after(camBtn);
-    if(camBtn && adicionalLabel) camBtn.after(adicionalLabel);
-    if((adicionalLabel || camBtn) && nameField) (adicionalLabel || camBtn).after(nameField);
-    if(nameField && loteLabel) nameField.after(loteLabel);
-    if(loteLabel && submitBtn) loteLabel.after(submitBtn);
-    if(submitBtn && refreshBtn) submitBtn.after(refreshBtn);
-    if(refreshBtn && muted) refreshBtn.after(muted);
+    // El orden ya está definido directamente en el HTML/CSS para evitar que otro estilo lo mueva.
+    return;
   }
   document.addEventListener('DOMContentLoaded',()=>{
     restoreContext();
