@@ -361,12 +361,33 @@ def rango_sql(fecha_inicio=None, fecha_fin=None):
     return "fecha BETWEEN ? AND ?", (fecha_inicio, fecha_fin)
 
 
-def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=""):
+def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html="", id_selector=False, buscar_modo="CODIGO"):
     fecha_inicio = fecha_inicio or hoy_iso()
     fecha_fin = fecha_fin or fecha_inicio
+    buscar_modo = (buscar_modo or "CODIGO").upper()
+    if buscar_modo not in ("CODIGO", "DNI"):
+        buscar_modo = "CODIGO"
+    buscar_html = f"""
+        <div class="filter-id-search">
+          <label>Buscar trabajador</label>
+          <div class="filter-id-wrap">
+            <select name="buscar_modo" class="filter-id-mode">
+              <option value="CODIGO" {'selected' if buscar_modo == 'CODIGO' else ''}>CÓDIGO</option>
+              <option value="DNI" {'selected' if buscar_modo == 'DNI' else ''}>DNI</option>
+            </select>
+            <input type="tel" name="buscar" value="{buscar}" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="DIGITA CÓDIGO">
+          </div>
+          <small class="filter-id-help">CÓDIGO: busca al dejar de escribir. DNI: espera 8 dígitos.</small>
+        </div>
+    """ if id_selector else f"""
+        <div>
+          <label>Buscar</label>
+          <input name="buscar" value="{buscar}" placeholder="Buscar...">
+        </div>
+    """
     return f"""
     <div class="card filter-card">
-      <form method="get" action="{action}" class="filter-grid">
+      <form method="get" action="{action}" class="filter-grid" data-id-selector="{'1' if id_selector else '0'}">
         <div>
           <label>Desde</label>
           <input type="date" name="fecha_inicio" value="{fecha_inicio}">
@@ -375,10 +396,7 @@ def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=
           <label>Hasta</label>
           <input type="date" name="fecha_fin" value="{fecha_fin}">
         </div>
-        <div>
-          <label>Buscar</label>
-          <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, responsable, supervisor, cultivo, lote, proveedor...">
-        </div>
+        {buscar_html}
         <button type="submit" class="btn-blue filter-btn-manual">🔍 Filtrar</button>
         <a class="btn filter-refresh-btn" href="{action}">Actualizar</a>
         {extra_html}
@@ -3418,6 +3436,13 @@ html,body{max-width:100%;}
   overflow-wrap:anywhere!important;
   line-height:1.35!important;
 }
+.filter-id-wrap{display:grid;grid-template-columns:100px minmax(0,1fr);gap:8px;align-items:center}
+.filter-id-wrap select,.filter-id-wrap input{width:100%;min-width:0}
+.filter-id-help{display:block;margin-top:4px;font-size:10px;font-weight:700;color:#64748b;line-height:1.15}
+#apb_universal_alert{position:fixed;left:10px;right:10px;top:78px;z-index:2147483647;max-width:680px;margin:auto;padding:14px 16px;border-radius:15px;font-weight:950;color:#fff;text-align:center;box-shadow:0 14px 34px rgba(0,0,0,.38);font-size:14px;line-height:1.25;pointer-events:none;display:none;box-sizing:border-box}
+#apb_universal_alert.ok{background:#087f3f;border:2px solid #22c55e}
+#apb_universal_alert.error{background:#b42318;border:2px solid #ef4444}
+@media(max-width:780px){.filter-id-wrap{grid-template-columns:82px minmax(0,1fr);gap:7px}.filter-id-help{font-size:9px;color:#cbd5e1}#apb_universal_alert{left:8px;right:8px;top:72px;font-size:13.5px;padding:13px 14px}}
 @media(max-width:780px){
   .prize-toast-msg{
     left:10px!important;right:10px!important;width:auto!important;
@@ -3461,15 +3486,21 @@ window.apbPlaySound = function(ok=true){
     if(navigator.vibrate) navigator.vibrate(ok ? [90] : [150,90,180]);
   }catch(e){}
 };
-window.apbToastDuration = function(ok){ return ok ? 5200 : 7600; };
+window.apbToastDuration = function(ok){ return ok ? 6000 : 8500; };
+window.apbUniversalAlert = function(msg,ok=true){
+  let el=document.getElementById('apb_universal_alert'); if(!el){el=document.createElement('div');el.id='apb_universal_alert';document.body.appendChild(el);}
+  el.className=ok?'ok':'error'; el.textContent=String(msg||''); el.style.display='block';
+  const place=()=>{const vv=window.visualViewport;el.style.top=Math.max(70,(vv?vv.offsetTop:0)+72)+'px';}; place();
+  clearTimeout(el.__timer); el.__timer=setTimeout(()=>{el.style.display='none';},ok?6000:8500);
+};
 
 document.addEventListener('DOMContentLoaded', function(){
   const flashes = Array.from(document.querySelectorAll('.server-flash'));
   flashes.forEach((el,idx)=>{
     const ok = el.classList.contains('ok');
     // El sonido de un flash puede estar bloqueado por autoplay; los registros AJAX sí suenan.
-    if(idx===0) setTimeout(()=>window.apbPlaySound(ok),120);
-    const ms = ok ? 6000 : 8500;
+    if(idx===0){setTimeout(()=>window.apbPlaySound(ok),120);setTimeout(()=>window.apbUniversalAlert(el.textContent||'',ok),160);}
+    const ms = ok ? 6500 : 9000;
     setTimeout(()=>{ el.style.transition='opacity .35s ease,transform .35s ease'; el.style.opacity='0'; el.style.transform='translateY(-6px)'; setTimeout(()=>el.remove(),380); }, ms);
   });
 });
@@ -3869,6 +3900,11 @@ window.addEventListener("pageshow", actualizarComedoresPorFundo);
 setTimeout(actualizarComedoresPorFundo, 150);
 </script>
 
+<script>
+document.addEventListener('DOMContentLoaded',function(){
+  try{window.avisoMovil=function(msg,ok=true){window.apbUniversalAlert?.(msg,ok)};window.toastFix=window.avisoMovil;}catch(e){}
+});
+</script>
 </body>
 </html>
 """
@@ -4294,13 +4330,20 @@ def consumos():
     fecha_inicio = request.args.get("fecha_inicio") or fecha
     fecha_fin = request.args.get("fecha_fin") or fecha_inicio
     buscar = clean_text(request.args.get("buscar"))
+    buscar_modo = clean_text(request.args.get("buscar_modo") or "CODIGO").upper()
+    if buscar_modo not in ("CODIGO", "DNI"):
+        buscar_modo = "CODIGO"
     cond, params = rango_sql(fecha_inicio, fecha_fin)
     where = cond
     final_params = list(params)
     if buscar:
-        where += " AND (dni LIKE ? OR trabajador LIKE ? OR area LIKE ? OR fundo LIKE ? OR observacion LIKE ? OR proveedor LIKE ? OR responsable LIKE ? OR supervisor LIKE ? OR tipo LIKE ? OR dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?))"
         b = f"%{buscar}%"
-        final_params += [b, b, b, b, b, b, b, b, b, b]
+        if buscar_modo == "DNI":
+            where += " AND dni LIKE ?"
+            final_params.append(b)
+        else:
+            where += " AND dni IN (SELECT dni FROM trabajadores WHERE COALESCE(codigo,'') LIKE ?)"
+            final_params.append(b)
 
     rows = q_all(f"SELECT consumos.*, COALESCE((SELECT codigo FROM trabajadores WHERE trabajadores.dni=consumos.dni LIMIT 1),'') AS codigo FROM consumos WHERE {where} ORDER BY fecha DESC,hora DESC,id DESC", tuple(final_params))
     tabla = "".join([
@@ -4348,7 +4391,7 @@ def consumos():
     else:
         aviso_fecha = f"<div class='flash ok'>🟢 Día operativo ABIERTO: {fecha_peru_txt(fecha)}. Los registros se guardarán en esta fecha.</div>"
 
-    filtros = filtro_bar(url_for("consumos"), fecha_inicio, fecha_fin, buscar)
+    filtros = filtro_bar(url_for("consumos"), fecha_inicio, fecha_fin, buscar, id_selector=True, buscar_modo=buscar_modo)
 
     # Contador visible para registro masivo/lecturas de la fecha consultada.
     # Antes esta variable no existía dentro de /consumos y generaba error 500 al hacer clic en Consumos.
@@ -5702,6 +5745,28 @@ def consumos():
   #form_consumo .consumo-camera-btn{font-size:11.5px!important;}
 }
 
+@media (max-width:760px){
+  /* Ajuste final pedido: DNI/CÓDIGO justo debajo de TIPO CONSUMO y cámara al mismo nivel de Consumo adicional */
+  #form_consumo > .consumo-field:nth-of-type(7){order:7!important;grid-column:1/-1!important;} /* tipo consumo */
+  #form_consumo .consumo-field.consumo-dni{order:8!important;grid-column:1/-1!important;margin-top:-1px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:84px minmax(0,1fr)!important;gap:6px!important;align-items:center!important;}
+  #form_consumo .consumo-field.consumo-dni #modo_id_consumo,
+  #form_consumo .consumo-field.consumo-dni #dni_consumo{min-height:38px!important;height:38px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-help{margin-top:3px!important;}
+  #form_consumo .consumo-camera-btn{order:9!important;grid-column:1/2!important;min-height:38px!important;height:38px!important;width:100%!important;margin:0!important;display:flex!important;align-items:center!important;justify-content:center!important;}
+  #form_consumo > label:not(.label-lote-final){order:9!important;grid-column:2/3!important;min-height:38px!important;height:38px!important;margin:0!important;padding:7px 10px!important;border-radius:11px!important;display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:7px!important;font-size:11px!important;font-weight:900!important;background:transparent!important;color:inherit!important;border:1px solid rgba(148,163,184,.35)!important;}
+  #form_consumo .consumo-name{order:10!important;grid-column:1/-1!important;}
+  #form_consumo .label-lote-final{order:11!important;grid-column:1/-1!important;}
+  #btn_submit_consumo{order:12!important;grid-column:1/-1!important;}
+  #form_consumo>a.btn{order:13!important;grid-column:1/-1!important;}
+  #form_consumo .muted.small{order:14!important;grid-column:1/-1!important;}
+}
+@media (max-width:420px){
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:78px minmax(0,1fr)!important;gap:6px!important;}
+  #form_consumo .consumo-camera-btn{font-size:11.2px!important;}
+  #form_consumo > label:not(.label-lote-final){font-size:10.2px!important;padding:6px 8px!important;gap:6px!important;}
+}
+
 </style>
 <script>
 (function(){
@@ -5718,6 +5783,7 @@ def consumos():
   }
   function shortToast(msg, ok=true){
     showStatusBanner(msg, ok);
+    if(typeof window.apbUniversalAlert==='function'){window.apbUniversalAlert(msg,ok);return;}
     let t=document.getElementById('apb_scan_toast');
     if(!t){
       t=document.createElement('div'); t.id='apb_scan_toast';
@@ -5771,15 +5837,14 @@ def consumos():
     b.style.display=show?'block':'none';
   }
   function filterRows(){
-    const input=$('.filter-card input[name="buscar"]'); const v=clean(input?.value);
+    const form=$('.filter-card form[data-id-selector="1"]'); const input=$('input[name="buscar"]',form||document); const v=clean(input?.value); const mode=$('[name="buscar_modo"]',form||document)?.value||'CODIGO';
     let visible=0;
     document.querySelectorAll('#tbody_consumos_principal tr.fila-db-consumo').forEach(tr=>{
-      const hay=(clean(tr.innerText)+' '+clean(tr.dataset.codigo)).includes(v);
+      const dni=clean(tr.children?.[3]?.textContent||''); const codigo=clean(tr.dataset.codigo||''); const hay=mode==='DNI'?dni.includes(v):codigo.includes(v);
       tr.style.display=(!v||hay)?'':'none'; if(!v||hay) visible++;
     });
     const empty=document.getElementById('fila_sin_registros'); if(empty) empty.style.display=visible?'none':'';
-    if(v){ setFilterBanner(visible ? ('Búsqueda automática: '+visible+' coincidencia(s).') : 'Sin coincidencias para la búsqueda.', !!visible, true); }
-    else{ setFilterBanner('', true, false); }
+    if(v){setFilterBanner(visible?('Búsqueda automática: '+visible+' coincidencia(s).'):('Sin coincidencias para '+mode+'.'),!!visible,true);}else{setFilterBanner('',true,false);}
   }
   function formDataScan(identifier, source='manual'){
     const form=document.getElementById('form_consumo');
@@ -5852,22 +5917,14 @@ def consumos():
     n.addEventListener('click',()=>scan(document.getElementById('dni_consumo')?.value,true));
   }
   function setupFilter(){
-    const form=$('.filter-card form'); if(!form) return;
-    let submitTimer=null;
-    const manualBtn=$('.filter-btn-manual', form);
-    if(manualBtn){ manualBtn.style.display='none'; }
-    let banner=document.getElementById('consumo_filter_banner');
-    if(!banner){ banner=document.createElement('div'); banner.id='consumo_filter_banner'; form.parentNode.appendChild(banner); }
-    const old=$('input[name="buscar"]',form);
-    if(old){
-      const n=old.cloneNode(true); old.replaceWith(n);
-      n.addEventListener('input',()=>{
-        filterRows();
-        clearTimeout(submitTimer);
-        submitTimer=setTimeout(()=>{ try{ form.requestSubmit(); }catch(e){ form.submit(); } }, 380);
-      });
-    }
-    ['fecha_inicio','fecha_fin'].forEach(k=>{ const el=$(`[name="${k}"]`,form); if(el) el.addEventListener('change',()=>{ clearTimeout(submitTimer); setFilterBanner('Actualizando filtro por fecha...', true, true); try{ form.requestSubmit(); }catch(e){ form.submit(); } }); });
+    const form=$('.filter-card form[data-id-selector="1"]'); if(!form) return; let submitTimer=null;
+    const manualBtn=$('.filter-btn-manual',form); if(manualBtn) manualBtn.style.display='none';
+    let banner=document.getElementById('consumo_filter_banner'); if(!banner){banner=document.createElement('div');banner.id='consumo_filter_banner';form.parentNode.appendChild(banner);}
+    const mode=$('[name="buscar_modo"]',form), old=$('input[name="buscar"]',form); let n=old; if(old){n=old.cloneNode(true);old.replaceWith(n);}
+    function apply(clear=true){const m=mode?.value||'CODIGO';if(!n)return;if(clear)n.value='';n.type='tel';n.inputMode='numeric';n.maxLength=m==='DNI'?8:12;n.placeholder=m==='DNI'?'DIGITA DNI - 8 DÍGITOS':'DIGITA CÓDIGO';n.setAttribute('pattern','[0-9]*');setFilterBanner('',true,false);setTimeout(()=>n.focus(),50);}
+    function go(){if(!n)return;n.value=String(n.value||'').replace(/\D/g,'');clearTimeout(submitTimer);filterRows();const v=n.value,m=mode?.value||'CODIGO';if(!v)return;if(m==='DNI'){if(v.length!==8){setFilterBanner('Completa los 8 dígitos del DNI.',true,true);return;}submitTimer=setTimeout(()=>form.submit(),140);}else{if(v.length<2)return;submitTimer=setTimeout(()=>form.submit(),500);}}
+    mode?.addEventListener('change',()=>apply(true));n?.addEventListener('input',go);n?.addEventListener('paste',()=>setTimeout(go,20));apply(false);
+    ['fecha_inicio','fecha_fin'].forEach(k=>{const el=$(`[name="${k}"]`,form);if(el)el.addEventListener('change',()=>{clearTimeout(submitTimer);setFilterBanner('Actualizando filtro por fecha...',true,true);form.submit();});});
   }
 
   function stopCamera(){
@@ -6464,6 +6521,7 @@ def entregas():
     }}
     function entregaToast(msg,ok=true){{
       setEntregaBanner(msg,ok);
+      if(typeof window.apbUniversalAlert==='function'){{window.apbUniversalAlert(msg,ok);return;}}
       let d=document.getElementById('apb_entrega_toast');
       if(!d){{d=document.createElement('div');d.id='apb_entrega_toast';document.body.appendChild(d);}}
       d.textContent=msg;
@@ -6698,18 +6756,80 @@ def trabajadores():
             flash("No se pudo importar trabajadores. El Excel debe tener como mínimo DNI y NOMBRE/TRABAJADOR. También acepta CODIGO, EMPRESA, PLANILLA, CARGO y AREA. Detalle: " + str(e)[:180], "error")
             return redirect(url_for("trabajadores"))
 
+def trabajadores():
+    if request.method == "POST" and request.form.get("manual") == "1":
+        dni = clean_dni(request.form.get("dni"))
+        nombre = clean_text(request.form.get("nombre"))
+        empresa = clean_text(request.form.get("empresa")) or "APB SAC"
+        planilla = clean_text(request.form.get("planilla")).upper()
+        codigo = clean_codigo(request.form.get("codigo"))
+        cargo = clean_text(request.form.get("cargo"))
+        area = clean_text(request.form.get("area"))
+        if len(dni) != 8 or not nombre:
+            flash("Ingresa un DNI de 8 dígitos y nombre válido.", "error")
+            return redirect(url_for("trabajadores"))
+
+        existe = q_one("SELECT id FROM trabajadores WHERE dni=?", (dni,))
+        if existe:
+            q_exec("UPDATE trabajadores SET empresa=?,planilla=?,codigo=?,nombre=?,cargo=?,area=?,activo=1,actualizado=CURRENT_TIMESTAMP WHERE dni=?",
+                   (empresa, planilla, codigo, nombre, cargo, area, dni))
+        else:
+            q_exec("INSERT INTO trabajadores(empresa,planilla,codigo,dni,nombre,cargo,area,activo) VALUES(?,?,?,?,?,?,?,1)",
+                   (empresa, planilla, codigo, dni, nombre, cargo, area))
+        flash("Trabajador guardado correctamente.", "ok")
+        return redirect(url_for("trabajadores"))
+
+    if request.method == "POST" and "excel" in request.files:
+        f = request.files.get("excel")
+        try:
+            if not f or not f.filename:
+                flash("Selecciona un archivo Excel para importar.", "error")
+                return redirect(url_for("trabajadores"))
+            if not f.filename.lower().endswith((".xlsx", ".xls")):
+                flash("Sube un archivo Excel válido (.xlsx o .xls).", "error")
+                return redirect(url_for("trabajadores"))
+
+            registros_dict, total_filas, omitidos = leer_trabajadores_excel_stream(f)
+
+            if not registros_dict:
+                flash("No se importó nada: no encontré filas válidas con DNI de 8 dígitos y NOMBRE. Descarga la plantilla y vuelve a intentar.", "error")
+                return redirect(url_for("trabajadores"))
+
+            # REEMPLAZO TOTAL OPTIMIZADO:
+            # Carga TODO el Excel válido, pero en una sola transacción y por lotes.
+            # Esto evita que Render mate el proceso por abrir miles de conexiones.
+            registros_lista = list(registros_dict.values())
+            creados = reemplazar_trabajadores_batch(registros_lista)
+            codigos_cargados = sum(1 for r in registros_lista if clean_codigo(r.get("codigo")))
+
+            q_exec("INSERT INTO importaciones(archivo,total,creados,errores,usuario) VALUES(?,?,?,?,?)",
+                   (f.filename, total_filas, creados, omitidos, session.get("user", "")))
+            flash(
+                f"Base de trabajadores reemplazada correctamente: {creados} trabajadores cargados. "
+                f"Códigos disponibles para lectura: {codigos_cargados}. Omitidos: {omitidos}." +
+                (" ⚠️ El Excel no trajo ningún CODIGO; por eso solo funcionará la lectura por DNI." if codigos_cargados == 0 else ""),
+                "ok" if codigos_cargados > 0 else "error"
+            )
+            return redirect(url_for("trabajadores"))
+        except Exception as e:
+            app.logger.exception("Error importando trabajadores")
+            flash("No se pudo importar trabajadores. El Excel debe tener como mínimo DNI y NOMBRE/TRABAJADOR. También acepta CODIGO, EMPRESA, PLANILLA, CARGO y AREA. Detalle: " + str(e)[:180], "error")
+            return redirect(url_for("trabajadores"))
+
     buscar = clean_text(request.args.get("buscar"))
+    buscar_modo = clean_text(request.args.get("buscar_modo") or "CODIGO").upper()
+    if buscar_modo not in ("CODIGO", "DNI"):
+        buscar_modo = "CODIGO"
     total_activos = q_one("SELECT COUNT(*) AS total FROM trabajadores WHERE activo=1")
     total_activos = int(total_activos["total"] if total_activos else 0)
     total_inactivos = q_one("SELECT COUNT(*) AS total FROM trabajadores WHERE activo=0")
     total_inactivos = int(total_inactivos["total"] if total_inactivos else 0)
     if buscar:
         b = f"%{buscar}%"
-        rows = q_all("""
-            SELECT * FROM trabajadores
-            WHERE dni LIKE ? OR codigo LIKE ? OR nombre LIKE ? OR cargo LIKE ? OR area LIKE ? OR empresa LIKE ? OR planilla LIKE ?
-            ORDER BY nombre
-        """, (b, b, b, b, b, b, b))
+        if buscar_modo == "DNI":
+            rows = q_all("SELECT * FROM trabajadores WHERE dni LIKE ? ORDER BY nombre", (b,))
+        else:
+            rows = q_all("SELECT * FROM trabajadores WHERE COALESCE(codigo,'') LIKE ? ORDER BY nombre", (b,))
     else:
         rows = q_all("SELECT * FROM trabajadores ORDER BY nombre")
 
@@ -6778,9 +6898,9 @@ def trabajadores():
         <h3>Base de trabajadores</h3>
       </div>
 
-      <form method="get" action="{url_for('trabajadores')}" class="form-grid" style="grid-template-columns:1fr auto auto;margin-bottom:14px">
-        <input name="buscar" value="{buscar}" placeholder="Buscar por DNI, código, nombre, cargo, área o empresa">
-        <button class="btn-blue">Buscar</button>
+      <form method="get" action="{url_for('trabajadores')}" class="form-grid trabajadores-search-form" style="grid-template-columns:100px 1fr auto;margin-bottom:14px" data-id-selector="1">
+        <select name="buscar_modo"><option value="CODIGO" {'selected' if buscar_modo=='CODIGO' else ''}>CÓDIGO</option><option value="DNI" {'selected' if buscar_modo=='DNI' else ''}>DNI</option></select>
+        <input type="tel" name="buscar" value="{buscar}" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="DIGITA CÓDIGO">
         <a class="btn" href="{url_for('trabajadores')}">Actualizar</a>
       </form>
 
@@ -6791,6 +6911,19 @@ def trabajadores():
         </table>
       </div>
     </div>
+    """
+    html += r"""
+    <script>
+    (function(){
+      document.addEventListener('DOMContentLoaded',function(){
+        const f=document.querySelector('.trabajadores-search-form'); if(!f) return;
+        const m=f.querySelector('[name="buscar_modo"]'), i=f.querySelector('[name="buscar"]'); let t=null;
+        function mode(clear=true){const v=m?.value||'CODIGO'; if(clear)i.value=''; i.type='tel'; i.inputMode='numeric'; i.maxLength=v==='DNI'?8:12; i.placeholder=v==='DNI'?'DIGITA DNI - 8 DÍGITOS':'DIGITA CÓDIGO'; setTimeout(()=>i.focus(),50);}
+        function go(){i.value=String(i.value||'').replace(/\D/g,''); clearTimeout(t); if(!i.value)return; const v=m?.value||'CODIGO'; if(v==='DNI'){if(i.value.length!==8)return;t=setTimeout(()=>f.submit(),120);}else{if(i.value.length<2)return;t=setTimeout(()=>f.submit(),500);}}
+        m?.addEventListener('change',()=>mode(true)); i?.addEventListener('input',go); i?.addEventListener('paste',()=>setTimeout(go,20)); mode(false);
+      });
+    })();
+    </script>
     """
     return render_page(html, "trabajadores")
 
