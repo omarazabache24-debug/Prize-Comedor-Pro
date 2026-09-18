@@ -5675,6 +5675,33 @@ def consumos():
   .apb-status-banner{padding:11px 12px!important;font-size:12px!important;}
   .filter-card .filter-grid{grid-template-columns:1fr 1fr!important;gap:7px!important;}
 }
+@media (max-width:760px){
+  /* Ajuste fino móvil: menos espacio y DNI/CÓDIGO en una sola fila justo debajo de tipo consumo */
+  #form_consumo{row-gap:6px!important;column-gap:7px!important;}
+  #form_consumo .consumo-field.consumo-dni{order:8!important;grid-column:1/-1!important;margin:0!important;}
+  #form_consumo .consumo-field.consumo-dni label{margin:0 0 3px 1px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{display:grid!important;grid-template-columns:82px minmax(0,1fr)!important;gap:7px!important;align-items:center!important;}
+  #form_consumo .consumo-field.consumo-dni #modo_id_consumo,
+  #form_consumo .consumo-field.consumo-dni #dni_consumo{grid-column:auto!important;grid-row:auto!important;width:100%!important;min-width:0!important;margin:0!important;}
+  #form_consumo .consumo-field.consumo-dni #dni_consumo{min-height:40px!important;height:40px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-help{margin-top:3px!important;font-size:8.8px!important;line-height:1.12!important;}
+  #form_consumo .consumo-camera-btn{order:9!important;grid-column:1/2!important;width:100%!important;min-height:39px!important;height:39px!important;margin:0!important;padding:6px 8px!important;}
+  #form_consumo > label:not(.label-lote-final){order:10!important;grid-column:2/3!important;display:flex!important;align-items:center!important;gap:7px!important;min-height:39px!important;margin:0!important;font-size:11px!important;font-weight:900!important;white-space:nowrap!important;}
+  #form_consumo .consumo-name{order:11!important;grid-column:1/-1!important;}
+  #form_consumo .worker-name-field,#nombre_trabajador{min-height:38px!important;height:38px!important;}
+  #form_consumo .label-lote-final{order:12!important;grid-column:1/-1!important;margin:0!important;min-height:39px!important;padding:8px 10px!important;display:flex!important;align-items:center!important;}
+  #btn_submit_consumo{order:13!important;grid-column:1/-1!important;min-height:40px!important;height:40px!important;margin:0!important;}
+  #form_consumo>a.btn{order:14!important;grid-column:1/-1!important;min-height:40px!important;height:40px!important;margin:0!important;}
+  #form_consumo .muted.small{order:15!important;margin-top:2px!important;}
+  #consumo_status_banner{margin:6px 0 9px!important;}
+  #consumo_filter_banner{position:sticky!important;top:72px!important;z-index:25!important;box-shadow:0 10px 22px rgba(15,23,42,.18)!important;}
+}
+@media (max-width:420px){
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:74px minmax(0,1fr)!important;gap:6px!important;}
+  #form_consumo > label:not(.label-lote-final){font-size:10.5px!important;gap:6px!important;}
+  #form_consumo .consumo-camera-btn{font-size:11.5px!important;}
+}
+
 </style>
 <script>
 (function(){
