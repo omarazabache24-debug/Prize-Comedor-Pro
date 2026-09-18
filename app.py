@@ -379,8 +379,8 @@ def filtro_bar(action, fecha_inicio=None, fecha_fin=None, buscar="", extra_html=
           <label>Buscar</label>
           <input name="buscar" value="{buscar}" placeholder="DNI, CÓDIGO, trabajador, responsable, supervisor, cultivo, lote, proveedor...">
         </div>
-        <button class="btn-blue">🔍 Filtrar</button>
-        <a class="btn" href="{action}">Actualizar</a>
+        <button type="submit" class="btn-blue filter-btn-manual">🔍 Filtrar</button>
+        <a class="btn filter-refresh-btn" href="{action}">Actualizar</a>
         {extra_html}
       </form>
     </div>
@@ -4386,6 +4386,7 @@ def consumos():
           <div style="font-size:10px">REG.</div>
         </div>
       </div>
+      <div id="consumo_status_banner" class="apb-status-banner ok" style="display:none;margin:8px 0 12px"></div>
       <form method="post" class="form-grid" id="form_consumo" onsubmit="return validarAntesEnviar(event)">
         <div class="consumo-field"><label>FECHA</label><input type="date" name="fecha" value="{fecha}" onchange="window.location='{url_for('consumos')}?fecha=' + this.value" title="Fecha operativa"></div>
         <div class="consumo-field"><label>RESPONSABLE</label><input id="responsable_consumo" name="responsable" placeholder="RESPONSABLE" required autocomplete="off" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase(); actualizarEstadoLoteResponsable();" {disabled}></div>
@@ -5628,6 +5629,32 @@ def consumos():
 }
 .id-entry-wrap{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;align-items:center}.id-entry-wrap select,.id-entry-wrap input{width:100%;min-width:0}.id-entry-help{display:block;margin-top:5px;color:#64748b;font-size:11px;font-weight:700}
 @media(max-width:700px){.id-entry-wrap{grid-template-columns:92px minmax(0,1fr);gap:6px}.id-entry-help{font-size:9px}}
+.apb-status-banner{border-radius:14px;padding:12px 14px;font-weight:950;box-shadow:0 12px 26px rgba(15,23,42,.16);line-height:1.22;display:block}
+.apb-status-banner.ok{background:linear-gradient(135deg,#14532d,#166534);border:2px solid #22c55e;color:#f0fdf4}
+.apb-status-banner.error{background:linear-gradient(135deg,#7f1d1d,#991b1b);border:2px solid #ef4444;color:#fff1f2}
+.filter-card .filter-btn-manual{transition:all .18s ease}
+@media (max-width:760px){
+  #indicador_masivo_principal{padding:11px 12px!important;border-radius:14px!important;gap:8px!important;}
+  #indicador_masivo_principal span:first-child{font-size:12px!important;line-height:1.2!important;}
+  #indicador_masivo_contador{padding:6px 10px!important;font-size:12px!important;}
+  #contador_lecturas_box{padding:10px 11px!important;gap:9px!important;}
+  #contador_lecturas_box > div:first-child{font-size:20px!important;}
+  #contador_lecturas_box [style*="font-size:15px"]{font-size:12px!important;}
+  #ultimo_trabajador_lectura{font-size:12px!important;}
+  .worker-name-field{font-size:13px!important;font-weight:900!important;}
+  #form_consumo .consumo-field.consumo-dni{grid-column:1/-1!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:100px minmax(0,1fr)!important;}
+  #form_consumo .consumo-camera-btn{margin-top:2px!important;}
+  .filter-card .filter-btn-manual{display:none!important;}
+  .filter-card .filter-grid{grid-template-columns:1fr 1fr!important;gap:8px!important;}
+  .filter-card .filter-grid > div:nth-child(3){grid-column:1/-1!important;}
+  .filter-card .filter-refresh-btn{width:100%!important;justify-content:center!important;}
+}
+@media (max-width:420px){
+  #form_consumo{grid-template-columns:1fr 1fr!important;gap:7px!important;}
+  #form_consumo .consumo-field input,#form_consumo .consumo-field select{font-size:11.5px!important;padding:7px 8px!important;}
+  .apb-status-banner{padding:11px 12px!important;font-size:12px!important;}
+}
 </style>
 <script>
 (function(){
@@ -5635,7 +5662,15 @@ def consumos():
   const clean = v=>String(v ?? '').trim().toUpperCase();
   let busy=false, timer=null, aborter=null, camStream=null, camRaf=0, camBusy=false, lastCamCode="", lastCamAt=0; const CAM_REPEAT_MS=4000;
 
+  function showStatusBanner(msg, ok=true){
+    const box=document.getElementById('consumo_status_banner');
+    if(!box) return;
+    box.className='apb-status-banner '+(ok?'ok':'error');
+    box.textContent=msg;
+    box.style.display='block';
+  }
   function shortToast(msg, ok=true){
+    showStatusBanner(msg, ok);
     let t=document.getElementById('apb_scan_toast');
     if(!t){
       t=document.createElement('div'); t.id='apb_scan_toast';
@@ -5762,11 +5797,19 @@ def consumos():
   }
   function setupFilter(){
     const form=$('.filter-card form'); if(!form) return;
+    let submitTimer=null;
+    const manualBtn=$('.filter-btn-manual', form);
+    if(manualBtn){ manualBtn.style.display='none'; }
     const old=$('input[name="buscar"]',form);
     if(old){
-      const n=old.cloneNode(true); old.replaceWith(n); n.addEventListener('input',filterRows);
+      const n=old.cloneNode(true); old.replaceWith(n);
+      n.addEventListener('input',()=>{
+        filterRows();
+        clearTimeout(submitTimer);
+        submitTimer=setTimeout(()=>{ try{ form.requestSubmit(); }catch(e){ form.submit(); } }, 380);
+      });
     }
-    ['fecha_inicio','fecha_fin'].forEach(k=>{ const el=$(`[name="${k}"]`,form); if(el) el.addEventListener('change',()=>form.submit()); });
+    ['fecha_inicio','fecha_fin'].forEach(k=>{ const el=$(`[name="${k}"]`,form); if(el) el.addEventListener('change',()=>{ clearTimeout(submitTimer); try{ form.requestSubmit(); }catch(e){ form.submit(); } }); });
   }
 
   function stopCamera(){
@@ -6290,6 +6333,7 @@ def entregas():
           </div>
           <div class="entrega-summary-count"><b id="entrega_auto_count">{entregas_guardadas}</b><span>ENTREG.</span></div>
         </div>
+        <div id="entrega_status_banner" class="apb-status-banner ok" style="display:none;margin:10px 0 12px"></div>
         <form method="get" class="form-grid two entrega-quick-form" id="form_entrega_busqueda">
           <div class="entrega-field"><label>FECHA</label><input type="date" id="fecha_entrega" name="fecha" value="{fecha}"></div>
           <div class="entrega-field"><label>RESPONSABLE</label><input id="responsable_entrega" name="responsable_entrega" placeholder="RESPONSABLE DE ENTREGA" value="{session.get('user','').upper()}" oninput="this.value=this.value.toUpperCase()"></div>
@@ -6346,7 +6390,11 @@ def entregas():
       .entrega-summary-green{{grid-template-columns:24px 1fr 58px;padding:8px 9px;gap:7px;border-radius:13px}}.entrega-summary-icon{{font-size:18px}}.entrega-summary-title{{font-size:11px;line-height:1.05}}.entrega-summary-sub{{font-size:9px}}.entrega-summary-last{{font-size:10px;max-height:2.35em;overflow:hidden}}.entrega-summary-count{{padding:6px 5px;border-radius:11px}}.entrega-summary-count b{{font-size:20px}}
       .entrega-quick-form{{grid-template-columns:1fr 1fr!important}}.entrega-id-field{{grid-column:1/-1!important}}.id-entry-wrap{{grid-template-columns:92px minmax(0,1fr);gap:6px}}.id-entry-help{{font-size:9px}}.entrega-quick-form button{{width:100%!important}}
       #apb_entrega_toast{{top:calc(env(safe-area-inset-top,0px) + 92px)!important}}
+      .filter-card .filter-btn-manual{{display:none!important}}
     }}
+    .apb-status-banner{{border-radius:14px;padding:12px 14px;font-weight:950;box-shadow:0 12px 26px rgba(15,23,42,.16);line-height:1.22;display:block}}
+    .apb-status-banner.ok{{background:linear-gradient(135deg,#14532d,#166534);border:2px solid #22c55e;color:#f0fdf4}}
+    .apb-status-banner.error{{background:linear-gradient(135deg,#7f1d1d,#991b1b);border:2px solid #ef4444;color:#fff1f2}}
     </style>
     <script>
     let entregaTimer=null, entregaBusy=false, qrEntrega=null, entregaLastScan='', entregaLastScanAt=0;
@@ -6357,6 +6405,7 @@ def entregas():
       try{{if(navigator.vibrate) navigator.vibrate(ok?70:[100,50,100]);}}catch(e){{}}
     }}
     function entregaToast(msg,ok=true){{
+      setEntregaBanner(msg,ok);
       let d=document.getElementById('apb_entrega_toast');
       if(!d){{d=document.createElement('div');d.id='apb_entrega_toast';document.body.appendChild(d);}}
       d.textContent=msg;
@@ -6364,7 +6413,8 @@ def entregas():
       clearTimeout(d.__x);d.__x=setTimeout(()=>{{d.style.display='none';}},ok?1900:3000);d.style.display='block';
     }}
     function responsableEntrega(){{return eClean(document.getElementById('responsable_entrega')?.value);}}
-    function setEstadoEntrega(msg,ok=true){{const e=document.getElementById('estado_entrega_auto');if(e){{e.style.display='block';e.style.background=ok?'#dcfce7':'#fee2e2';e.style.color=ok?'#166534':'#991b1b';e.textContent=msg;}}}}
+    function setEntregaBanner(msg,ok=true){{const b=document.getElementById('entrega_status_banner'); if(b){{b.className='apb-status-banner '+(ok?'ok':'error'); b.textContent=msg; b.style.display='block';}}}}
+    function setEstadoEntrega(msg,ok=true){{const e=document.getElementById('estado_entrega_auto');if(e){{e.style.display='block';e.style.background=ok?'#dcfce7':'#fee2e2';e.style.color=ok?'#166534':'#991b1b';e.textContent=msg;}} setEntregaBanner(msg,ok);}}
     function limpiarEntradaEntrega(refocus=true){{const i=document.getElementById('dni_entrega'),n=document.getElementById('nombre_trabajador_entrega');if(i)i.value='';if(n)n.value='';if(refocus)setTimeout(()=>i?.focus(),100);}}
     function aplicarModoEntrega(){{
       const m=document.getElementById('modo_id_entrega')?.value||'CODIGO',i=document.getElementById('dni_entrega');
