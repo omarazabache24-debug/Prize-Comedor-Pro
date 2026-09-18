@@ -3424,6 +3424,7 @@ html,body{max-width:100%;}
     min-height:58px!important;padding:15px 16px!important;
     font-size:15px!important;border-radius:15px!important;
     display:flex!important;align-items:center!important;justify-content:center!important;
+    top:calc(env(safe-area-inset-top,0px) + 72px)!important;
   }
   .server-flash{
     position:sticky!important;top:66px!important;z-index:2147483000!important;
@@ -5612,16 +5613,29 @@ def consumos():
 #form_consumo .consumo-field{min-width:0!important;display:flex!important;flex-direction:column!important;gap:5px!important;}
 #form_consumo .consumo-field label{font-size:11px!important;font-weight:950!important;color:#475569!important;letter-spacing:.25px!important;padding-left:2px!important;}
 #form_consumo .consumo-field input,#form_consumo .consumo-field select{width:100%!important;box-sizing:border-box!important;min-height:45px!important;}
-#form_consumo .consumo-camera-btn{grid-column:1/-1!important;min-height:47px!important;font-size:14px!important;}
-#form_consumo .consumo-name{grid-column:1/-1!important;}
+#form_consumo .consumo-camera-btn{grid-column:1/-1!important;min-height:47px!important;font-size:14px!important;order:9!important;}
+#form_consumo .consumo-dni{order:8!important;grid-column:1/-1!important;}
+#form_consumo .consumo-name{grid-column:1/-1!important;order:10!important;}
 #form_consumo #info_trabajador_consumo,#form_consumo #qr-reader,#form_consumo .label-lote-final,#form_consumo #lote_panel,#form_consumo #btn_submit_consumo,#form_consumo>a.btn{grid-column:1/-1!important;}
+#form_consumo .label-lote-final{order:11!important;}
 @media (max-width: 760px){
-  #form_consumo{grid-template-columns:1fr 1fr!important;gap:8px!important;}
-  #form_consumo .consumo-field label{font-size:9.5px!important;color:#cbd5e1!important;}
+  #form_consumo{grid-template-columns:1fr 1fr!important;gap:8px!important;align-items:start!important;}
+  #form_consumo > .consumo-field:nth-of-type(7){grid-column:1/-1!important;}
+  #form_consumo .consumo-field label{font-size:10px!important;color:#cbd5e1!important;margin-bottom:1px!important;}
   #form_consumo .consumo-field input,#form_consumo .consumo-field select{min-height:39px!important;height:39px!important;font-size:12px!important;padding:7px 9px!important;}
-  #form_consumo .consumo-camera-btn{min-height:43px!important;height:43px!important;font-size:12.5px!important;}
+  #form_consumo .consumo-field.consumo-dni{margin-top:0!important;padding-top:0!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{display:grid!important;grid-template-columns:88px minmax(0,1fr)!important;gap:8px!important;align-items:center!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap select,#form_consumo .consumo-field.consumo-dni .id-entry-wrap input{margin:0!important;min-height:40px!important;height:40px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-help{margin-top:4px!important;font-size:9px!important;line-height:1.15!important;}
+  #form_consumo .consumo-camera-btn{min-height:43px!important;height:43px!important;font-size:12.5px!important;margin-top:0!important;padding:8px 10px!important;}
   #form_consumo .consumo-name input{font-weight:900!important;}
+  #consumo_status_banner{margin:8px 0 10px!important;}
+  .filter-card{padding:10px!important;}
+  .filter-card .filter-grid{grid-template-columns:1fr 1fr!important;gap:8px!important;align-items:end!important;}
+  .filter-card .filter-grid label{font-size:10px!important;}
+  .filter-card .filter-grid input,.filter-card .filter-grid select{min-height:39px!important;height:39px!important;font-size:12px!important;padding:7px 9px!important;}
 }
+
 @media (max-width: 420px){
   .apb-scan-video{height:205px!important;}
   #info_trabajador_consumo > div{grid-template-columns:1fr 1fr!important;}
@@ -5650,10 +5664,16 @@ def consumos():
   .filter-card .filter-grid > div:nth-child(3){grid-column:1/-1!important;}
   .filter-card .filter-refresh-btn{width:100%!important;justify-content:center!important;}
 }
+#consumo_filter_banner{display:none;border-radius:12px;padding:10px 12px;font-weight:900;line-height:1.2;margin-top:8px;}
+#consumo_filter_banner.ok{background:#dcfce7;color:#166534;border:1px solid #86efac;}
+#consumo_filter_banner.error{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;}
+@media (max-width:760px){#consumo_filter_banner{display:block;font-size:12px;}}
 @media (max-width:420px){
   #form_consumo{grid-template-columns:1fr 1fr!important;gap:7px!important;}
   #form_consumo .consumo-field input,#form_consumo .consumo-field select{font-size:11.5px!important;padding:7px 8px!important;}
+  #form_consumo .consumo-field.consumo-dni .id-entry-wrap{grid-template-columns:80px minmax(0,1fr)!important;gap:7px!important;}
   .apb-status-banner{padding:11px 12px!important;font-size:12px!important;}
+  .filter-card .filter-grid{grid-template-columns:1fr 1fr!important;gap:7px!important;}
 }
 </style>
 <script>
@@ -5716,6 +5736,13 @@ def consumos():
     const empty=document.getElementById('fila_sin_registros'); if(empty) empty.remove();
     body.insertAdjacentHTML('afterbegin',html); decorateRows(body);
   }
+  function setFilterBanner(msg, ok=true, show=true){
+    const b=document.getElementById('consumo_filter_banner');
+    if(!b) return;
+    b.className=ok?'ok':'error';
+    b.textContent=msg;
+    b.style.display=show?'block':'none';
+  }
   function filterRows(){
     const input=$('.filter-card input[name="buscar"]'); const v=clean(input?.value);
     let visible=0;
@@ -5724,6 +5751,8 @@ def consumos():
       tr.style.display=(!v||hay)?'':'none'; if(!v||hay) visible++;
     });
     const empty=document.getElementById('fila_sin_registros'); if(empty) empty.style.display=visible?'none':'';
+    if(v){ setFilterBanner(visible ? ('Búsqueda automática: '+visible+' coincidencia(s).') : 'Sin coincidencias para la búsqueda.', !!visible, true); }
+    else{ setFilterBanner('', true, false); }
   }
   function formDataScan(identifier, source='manual'){
     const form=document.getElementById('form_consumo');
@@ -5800,6 +5829,8 @@ def consumos():
     let submitTimer=null;
     const manualBtn=$('.filter-btn-manual', form);
     if(manualBtn){ manualBtn.style.display='none'; }
+    let banner=document.getElementById('consumo_filter_banner');
+    if(!banner){ banner=document.createElement('div'); banner.id='consumo_filter_banner'; form.parentNode.appendChild(banner); }
     const old=$('input[name="buscar"]',form);
     if(old){
       const n=old.cloneNode(true); old.replaceWith(n);
@@ -5809,7 +5840,7 @@ def consumos():
         submitTimer=setTimeout(()=>{ try{ form.requestSubmit(); }catch(e){ form.submit(); } }, 380);
       });
     }
-    ['fecha_inicio','fecha_fin'].forEach(k=>{ const el=$(`[name="${k}"]`,form); if(el) el.addEventListener('change',()=>{ clearTimeout(submitTimer); try{ form.requestSubmit(); }catch(e){ form.submit(); } }); });
+    ['fecha_inicio','fecha_fin'].forEach(k=>{ const el=$(`[name="${k}"]`,form); if(el) el.addEventListener('change',()=>{ clearTimeout(submitTimer); setFilterBanner('Actualizando filtro por fecha...', true, true); try{ form.requestSubmit(); }catch(e){ form.submit(); } }); });
   }
 
   function stopCamera(){
